@@ -70,13 +70,29 @@ func executeMigrationFile(conn *pgx.Conn, fileName string) {
 		os.Exit(1)
 	}
 
-	sql := string(contents) + "INSERT INTO migrations (name) VALUES ($1);"
+	// Initiate a transaction, rolling back after the method completes.
+	tx, err := conn.Begin(context.Background())
+	if err != nil {
+		fmt.Printf("Unable to begin transaction for migration %s: %v\n", fileName, err)
+		os.Exit(1)
+	}
+	defer tx.Rollback(context.Background())
 
-	_, err = conn.Exec(context.Background(), sql, fileName)
+	// Apply the migration
+	_, err = tx.Exec(context.Background(), string(contents))
 	if err != nil {
 		fmt.Printf("Unable to apply migration %s: %v\n", fileName, err)
 		os.Exit(1)
 	}
+
+	_, err = tx.Exec(context.Background(), "INSERT INTO migrations (name) VALUES ($1);", fileName)
+	if err != nil {
+		fmt.Printf("Unable to persist migration status %s: %v\n", fileName, err)
+		os.Exit(1)
+	}
+
+	err = tx.Commit(context.Background())
+	fmt.Printf("Appled migration %s successfully.\n", fileName)
 }
 
 // migrationDifference returns a slice of migration file names that are in `all` but not in `applied`—these are the
