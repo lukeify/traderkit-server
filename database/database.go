@@ -21,7 +21,7 @@ func New() *pgx.Conn {
 		os.Exit(1)
 	}
 
-	_, err = conn.Query(context.Background(), "CREATE TABLE IF NOT EXISTS migrations (name VARCHAR(255))")
+	_, err = conn.Exec(context.Background(), "CREATE TABLE IF NOT EXISTS migrations (name VARCHAR(255))")
 	if err != nil {
 		fmt.Printf("Unable to create migrations table: %v\n", err)
 		os.Exit(1)
