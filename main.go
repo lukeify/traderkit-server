@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+
 	"traderkit-server/utils"
 
 	"github.com/gofiber/fiber/v2"
