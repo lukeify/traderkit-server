@@ -1,17 +1,22 @@
 package main
 
 import (
-    "log"
+	"log"
+	"os"
+	"traderkit-server/utils"
 
-    "github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2"
 )
 
 func main() {
-    app := fiber.New()
+	if err := utils.LoadEnvFile(); err != nil {
+		os.Exit(1)
+	}
+	app := fiber.New()
 
-    app.Get("/", func (c *fiber.Ctx) error {
-        return c.SendString("Hello, World!")
-    })
+	app.Get("/", func(c *fiber.Ctx) error {
+		return c.SendString("Hello, World!")
+	})
 
-    log.Fatal(app.Listen(":3000"))
+	log.Fatal(app.Listen(":3000"))
 }

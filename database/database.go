@@ -14,10 +14,10 @@ import (
 // New creates a new database connection, initializes the `migrations` table if it doesn't exist,
 // and then runs any migrations that haven't already been applied.
 func New() *pgx.Conn {
-	dbUrl := "postgres://postgres:postgres@localhost:5432/postgres"
+	dbUrl := os.Getenv("DATABASE_URL")
 	conn, err := pgx.Connect(context.Background(), dbUrl)
 	if err != nil {
-		fmt.Printf("Unable to connect to datbaase: %v\n", err)
+		fmt.Printf("Unable to connect to database: %v\n", err)
 		os.Exit(1)
 	}
 
