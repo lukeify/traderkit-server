@@ -4,16 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/jackc/pgx/v5"
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+
 	"traderkit-server/utils"
 )
 
 type Ingestion struct {
 	db       *pgx.Conn
 	provider IngestionProvider
+}
+
+type IngestionProvider interface {
+	BackfilledData(symbols []string, ingestFrom time.Time) (pgx.CopyFromSource, error)
 }
 
 func NewIngestor(db *pgx.Conn, provider IngestionProvider) *Ingestion {
@@ -42,7 +48,21 @@ func (oi *Ingestion) Backfill(symbols []string) {
 		mostRecentIngestionTime = utils.LastRetainedDay(time.Now(), n)
 	}
 
-	oi.provider.RetrieveBackfilledData(symbols, mostRecentIngestionTime)
+	iter, err := oi.provider.BackfilledData(symbols, mostRecentIngestionTime)
+	if err != nil {
+		fmt.Printf("Could not generate backfill iterator: %#v", err)
+		os.Exit(1)
+	}
+
+	_, err = oi.db.CopyFrom(
+		context.Background(),
+		pgx.Identifier{"bars"},
+		[]string{"symbol_id", "ts", "o", "h", "l", "c", "v", "txns"},
+		iter,
+	)
+	if err != nil {
+		panic("Error calling pgx.CopyFrom")
+	}
 }
 
 // mostRecentIngestion gets the most recent bar timestamp for the provided symbol and returns it. If no such bar is
