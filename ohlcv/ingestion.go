@@ -57,11 +57,11 @@ func (oi *Ingestion) Backfill(symbols []string) {
 	_, err = oi.db.CopyFrom(
 		context.Background(),
 		pgx.Identifier{"bars"},
-		[]string{"symbol_id", "ts", "o", "h", "l", "c", "v", "txns"},
+		[]string{"s_id", "ts", "o", "h", "l", "c", "v", "txns"},
 		iter,
 	)
 	if err != nil {
-		panic("Error calling pgx.CopyFrom")
+		panic(fmt.Sprintf("Error calling pgx.CopyFrom: %#v\n", err))
 	}
 }
 
@@ -71,7 +71,7 @@ func (oi *Ingestion) mostRecentIngestion(symbol string) (time.Time, error) {
 	var ts time.Time
 	err := oi.db.QueryRow(
 		context.Background(),
-		"SELECT ts FROM bars WHERE symbol_id = $1 ORDER BY ts DESC LIMIT 1",
+		"SELECT ts FROM bars WHERE s_id = $1 ORDER BY ts DESC LIMIT 1",
 		symbol,
 	).Scan(&ts)
 	if err != nil && errors.Is(err, pgx.ErrNoRows) {
