@@ -1,17 +1,17 @@
 CREATE TABLE securities (
     id UUID PRIMARY KEY,
-    symbol VARCHAR(4) UNIQUE NOT NULL,
+    symbol VARCHAR(8) UNIQUE NOT NULL,
     name TEXT NOT NULL
 );
 
 CREATE TABLE bars (
-    symbol_id VARCHAR(4) NOT NULL REFERENCES securities(symbol),
+    s_id VARCHAR(8) NOT NULL,
     ts TIMESTAMPTZ NOT NULL,
-    o NUMERIC(10,4) NOT NULL,
-    h NUMERIC(10,4) NOT NULL,
-    l NUMERIC(10,4) NOT NULL,
-    c NUMERIC(10,4) NOT NULL,
-    v NUMERIC(10,4) NOT NULL,
+    o NUMERIC(12,4) NOT NULL,
+    h NUMERIC(12,4) NOT NULL,
+    l NUMERIC(12,4) NOT NULL,
+    c NUMERIC(12,4) NOT NULL,
+    v INTEGER NOT NULL,
     txns INTEGER NOT NULL,
-    PRIMARY KEY (symbol_id, ts)
+    PRIMARY KEY (s_id, ts)
 );
