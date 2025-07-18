@@ -5,16 +5,18 @@ import (
 	"context"
 	"encoding/csv"
 	"fmt"
-	"github.com/jackc/pgx/v5"
 	"io"
 	"os"
 	"path"
 	"strconv"
 	"time"
 
+	"traderkit-server/utils/progress_printer"
+
+	"github.com/jackc/pgx/v5"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
-	polygon "github.com/polygon-io/client-go/rest"
+	"github.com/polygon-io/client-go/rest"
 )
 
 // PolygonIngestion conforms to the `IngestionProvider` interface.
@@ -32,7 +34,6 @@ func (pi *PolygonIngestion) BackfilledData(symbols []string, ingestFrom time.Tim
 	// TODO: Support picking up backfilling from a partially backfilled polygon flat file.
 	// TODO: Support backfilling over multiple flat files.
 	// TODO: Once flat files are exhausted, switch to REST API for backfilling.
-	// TODO: Display a progress of current date, current ticker symbol, and total number of backfilled bars.
 
 	mc, err := minio.New(
 		"files.polygon.io",
@@ -48,19 +49,23 @@ func (pi *PolygonIngestion) BackfilledData(symbols []string, ingestFrom time.Tim
 		panic(fmt.Sprintf("Error instantiating MinIO client: %v\n", err))
 	}
 
-	return &polygonBackfillSource{
+	return &polygonBackfillIter{
+		pp:         progress_printer.NewProgressPrinter(os.Stdout),
 		s3:         mc,
 		ingestFrom: ingestFrom,
+		metrics:    backfillMetrics{},
 	}, nil
 }
 
-type polygonBackfillSource struct {
+type polygonBackfillIter struct {
+	pp         *progress_printer.ProgressPrinter
 	s3         *minio.Client
 	ingestFrom time.Time
 	gz         *gzip.Reader
 	csv        *csv.Reader
 	row        []string
 	err        error
+	metrics    backfillMetrics
 }
 
 // Next prepares the next row of data to be read for backfilling. Data is ready sequentially from the flat files
@@ -69,12 +74,15 @@ type polygonBackfillSource struct {
 //
 // If this is the first row, it will instantiate a
 // gzip & csv reader for the flat file corresponding to the `ingestFrom` date. A
-func (pbs *polygonBackfillSource) Next() bool {
+func (pbs *polygonBackfillIter) Next() bool {
 	if pbs.gz == nil && pbs.csv == nil {
+
+		pbs.metrics.setFileName(pbs.toFlatFileName(pbs.ingestFrom))
+
 		obj, err := pbs.s3.GetObject(
 			context.Background(),
 			"flatfiles",
-			pbs.toFlatFileName(pbs.ingestFrom),
+			pbs.metrics.fileName,
 			minio.GetObjectOptions{},
 		)
 		if err != nil {
@@ -97,8 +105,9 @@ func (pbs *polygonBackfillSource) Next() bool {
 
 	var err error
 	pbs.row, err = pbs.csv.Read()
+	// End of file reached, progress towards next file, or begin making REST API calls.
 	if err == io.EOF {
-		// No more rows to read, end of file.
+		pbs.pp.Complete("Ingestion complete.")
 		return false
 	}
 	if err != nil {
@@ -108,10 +117,12 @@ func (pbs *polygonBackfillSource) Next() bool {
 	return true
 }
 
-func (pbs *polygonBackfillSource) Values() ([]any, error) {
+func (pbs *polygonBackfillIter) Values() ([]any, error) {
 	// Parse the CSV row into the expected values provided by polygon.
 	// Extract ticker symbol
 	sId := pbs.row[0]
+	pbs.metrics.ingesting(sId)
+	pbs.pp.Update(pbs.metrics.get())
 
 	// Parse numeric values
 	v, _ := strconv.ParseUint(pbs.row[1], 10, 32)
@@ -131,13 +142,13 @@ func (pbs *polygonBackfillSource) Values() ([]any, error) {
 	return []any{sId, ts, o, h, l, c, v, txns}, nil
 }
 
-func (pbs *polygonBackfillSource) Err() error {
+func (pbs *polygonBackfillIter) Err() error {
 	return pbs.err
 }
 
 // Polygon's flat file naming structure is YYYY-MM-DD, accessible as a gzipped CSV file. The directory this flat file
 // is placed under is the` minute_aggs_v1` directory, with year and month subdirectories.
-func (pbs *polygonBackfillSource) toFlatFileName(t time.Time) string {
+func (pbs *polygonBackfillIter) toFlatFileName(t time.Time) string {
 	return path.Join(
 		"us_stocks_sip",
 		"minute_aggs_v1",
@@ -145,4 +156,23 @@ func (pbs *polygonBackfillSource) toFlatFileName(t time.Time) string {
 		t.Format("01"),
 		t.Format("2006-01-02")+".csv.gz",
 	)
+}
+
+type backfillMetrics struct {
+	fileName string
+	ticker   string
+	barCount int
+}
+
+func (bm *backfillMetrics) setFileName(name string) {
+	bm.fileName = name
+}
+
+func (bm *backfillMetrics) ingesting(ticker string) {
+	bm.ticker = ticker
+	bm.barCount++
+}
+
+func (bm *backfillMetrics) get() string {
+	return fmt.Sprintf("[%s] %d bars ingested (current ticker: %s)", bm.fileName, bm.barCount, bm.ticker)
 }
