@@ -42,10 +42,10 @@ func (oi *Ingestion) Backfill(symbols []string) {
 	if mostRecentIngestionTime.IsZero() {
 		// Determine what date we must backfill from.
 		n, err := strconv.Atoi(os.Getenv("RETENTION_PERIOD_DAYS"))
-		if err != nil {
+		if err != nil || n < 0 || n > 255 {
 			n = 14
 		}
-		mostRecentIngestionTime = utils.LastRetainedDay(time.Now(), n)
+		mostRecentIngestionTime = utils.LastRetainedDay(time.Now(), uint8(n))
 	}
 
 	iter, err := oi.provider.BackfilledData(symbols, mostRecentIngestionTime)
