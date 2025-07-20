@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -31,8 +32,8 @@ func New() *PolygonIngestion {
 }
 
 func (pi *PolygonIngestion) BackfilledData(symbols []string, ingestFrom time.Time) (pgx.CopyFromSource, error) {
+	// TODO: Support being agnostic about the flat file source, so we don't always need to retrieve from Polygon.
 	// TODO: Support picking up backfilling from a partially backfilled polygon flat file.
-	// TODO: Support backfilling over multiple flat files.
 	// TODO: Once flat files are exhausted, switch to REST API for backfilling.
 
 	mc, err := minio.New(
@@ -61,6 +62,7 @@ type polygonBackfillIter struct {
 	pp         *progress_printer.ProgressPrinter
 	s3         *minio.Client
 	ingestFrom time.Time
+	obj        *minio.Object
 	gz         *gzip.Reader
 	csv        *csv.Reader
 	row        []string
@@ -68,52 +70,32 @@ type polygonBackfillIter struct {
 	metrics    backfillMetrics
 }
 
-// Next prepares the next row of data to be read for backfilling. Data is ready sequentially from the flat files
-// corresponding to the `ingestFrom` date, iterating until no more flat files exist. Following this, the iterator
-// switches to reading from the REST API for un-backfilled data that is not available in a flat file yet.
+// Next prepares the next row of data to be read for backfilling. Data is ready sequentially from the Polygon's
+// flatfiles corresponding to the `ingestFrom` date, iterating through each file until no more flatfiles exist.
+// Following this, the iterator switches to reading from the REST API for un-backfilled data that is not available in a
+// flatfile yet (a flatfile for the yesterday's data is not published until 11AM ET the following day).
 //
-// If this is the first row, it will instantiate a
-// gzip & csv reader for the flat file corresponding to the `ingestFrom` date. A
+// If the backfill has not begun, then `pbs.gz` will be `nil`, and opening a flatfile corresponding to the `ingestFrom`
+// date will be attempted.
 func (pbs *polygonBackfillIter) Next() bool {
-	if pbs.gz == nil && pbs.csv == nil {
-
+	if pbs.gz == nil {
+		// TODO: This is a roundabout way of having openFlatFile have access to the file name. It should be passed in
+		//   as a param.
 		pbs.metrics.setFileName(pbs.toFlatFileName(pbs.ingestFrom))
-
-		obj, err := pbs.s3.GetObject(
-			context.Background(),
-			"flatfiles",
-			pbs.metrics.fileName,
-			minio.GetObjectOptions{},
-		)
+		err := pbs.openFlatFile()
 		if err != nil {
-			panic("s3.GetObject error: " + err.Error())
-			// TODO: Handle error—this might be where the file is not found because it does not exist for date?
-		}
-		pbs.gz, err = gzip.NewReader(obj)
-		if err != nil {
-			panic(fmt.Sprintf("gzip.NewReader error: %#v", err))
-		}
-
-		pbs.csv = csv.NewReader(pbs.gz)
-		// Read and ignore the header
-		_, err = pbs.csv.Read()
-		if err != nil {
-			panic(fmt.Sprintf("csv.Read() header row error: %#v\n", err))
+			// TODO: This is assumed to be that the next flat file does not exist, switch to ingesting from the
+			//   REST API.
 			return false
 		}
 	}
 
-	var err error
-	pbs.row, err = pbs.csv.Read()
-	// End of file reached, progress towards next file, or begin making REST API calls.
+	err := pbs.readFromFlatFile()
 	if err == io.EOF {
-		pbs.pp.Complete("Ingestion complete.")
-		return false
+		pbs.closeFlatFile()
+		return pbs.Next()
 	}
-	if err != nil {
-		panic(fmt.Sprintf("Row read error %#v\n", err))
-		return false
-	}
+
 	return true
 }
 
@@ -156,6 +138,77 @@ func (pbs *polygonBackfillIter) toFlatFileName(t time.Time) string {
 		t.Format("01"),
 		t.Format("2006-01-02")+".csv.gz",
 	)
+}
+
+// openFlatFile will open the flatfile that corresponds to the `ingestFrom` date currently stored in the struct.
+func (pbs *polygonBackfillIter) openFlatFile() error {
+	var err error
+	pbs.obj, err = pbs.s3.GetObject(
+		context.Background(),
+		"flatfiles",
+		pbs.metrics.fileName,
+		minio.GetObjectOptions{},
+	)
+	if err != nil {
+		panic(fmt.Sprintf("[Error] pbs.s3.GetObject() error: %v\n", err))
+	}
+
+	// If the flatfile does not exist on the server (such as because it hasn't been uploaded yet), this is where the
+	// error will be encountered—calling minio.GetObject() merely instantiates an object instance, it doesn't fetch it.
+	pbs.gz, err = gzip.NewReader(pbs.obj)
+	if err != nil {
+		// TODO: Close pbs.obj here.
+		var minioErr minio.ErrorResponse
+		if errors.As(err, &minioErr) && minioErr.StatusCode == 403 {
+			return err
+		} else {
+			panic(fmt.Sprintf("[Error] gzip.NewReader() error: %v\n", err))
+		}
+	}
+
+	pbs.csv = csv.NewReader(pbs.gz)
+	// Read the first row to ignore the header.
+	_, err = pbs.csv.Read()
+	if err != nil {
+		panic(fmt.Sprintf("[Error] csv.Read() error reading header row: %#v\n", err))
+	}
+
+	return nil
+}
+
+func (pbs *polygonBackfillIter) readFromFlatFile() error {
+	var err error
+	pbs.row, err = pbs.csv.Read()
+
+	if err == io.EOF {
+		// TODO: Write a comment to the progress printer.
+		// pbs.pp.Complete("Ingestion complete.")
+		return err
+	}
+	if err != nil {
+		panic(fmt.Sprintf("Row read error %#v\n", err))
+	}
+
+	return nil
+}
+
+func (pbs *polygonBackfillIter) closeFlatFile() {
+	err := pbs.gz.Close()
+	pbs.gz = nil
+	if err != nil {
+		panic("[Error] pbs.gz.Close(): " + err.Error())
+	}
+
+	err = pbs.obj.Close()
+	if err != nil {
+		panic("[Error] pbs.obj.Close(): " + err.Error())
+	}
+
+	// TODO: Handle scenarios where the date advancement leads to today's date.
+	pbs.ingestFrom = pbs.ingestFrom.AddDate(0, 0, 1)
+	if pbs.ingestFrom.After(time.Now()) {
+		panic("After now!")
+	}
 }
 
 type backfillMetrics struct {
