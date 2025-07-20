@@ -8,13 +8,13 @@ import (
 
 // LastRetainedDay returns the time.Time in UTC that represents the start of the last day in Eastern Time that should
 // have aggregate bars retained for.
-func LastRetainedDay(now time.Time, n int) time.Time {
+func LastRetainedDay(now time.Time, n uint8) time.Time {
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		panic(err)
 	}
 
-	i := 0
+	var i uint8 = 0
 	today := truncateToLocationDay(now.In(loc))
 	curr := today
 
