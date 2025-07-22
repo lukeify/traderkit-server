@@ -159,7 +159,7 @@ func (pbs *polygonBackfillIter) openFlatFile() error {
 	if err != nil {
 		// TODO: Close pbs.obj here.
 		var minioErr minio.ErrorResponse
-		if errors.As(err, &minioErr) && minioErr.StatusCode == 403 {
+		if errors.As(err, &minioErr) && (minioErr.StatusCode == 403 || minioErr.StatusCode == 404) {
 			return err
 		} else {
 			panic(fmt.Sprintf("[Error] gzip.NewReader() error: %v\n", err))
