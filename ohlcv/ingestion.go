@@ -31,7 +31,7 @@ func NewIngestor(db *pgx.Conn, provider IngestionProvider) *Ingestion {
 
 func (oi *Ingestion) Backfill(symbols []string) {
 	// Compute the most recent ingestion date, based off the most recent bar timestamp for the provided symbol.
-	mostRecentIngestionTime, err := oi.mostRecentIngestion(symbols[0])
+	mostRecentIngestionTime, err := oi.earliestIngestion()
 	if err != nil {
 		fmt.Printf("Could not determine the most recent ingestion: %#v", err)
 		os.Exit(1)
@@ -65,14 +65,15 @@ func (oi *Ingestion) Backfill(symbols []string) {
 	}
 }
 
-// mostRecentIngestion gets the most recent bar timestamp for the provided symbol and returns it. If no such bar is
-// found, then a zero `time.Time` value is returned and `err` will be `nil`.
-func (oi *Ingestion) mostRecentIngestion(symbol string) (time.Time, error) {
+// earliestIngestion gets the earliest bar timestamp for all symbols in the database. If no such timestamp exists,
+// then a zero `time.Time` value is returned and `err` will be `nil`.
+func (oi *Ingestion) earliestIngestion() (time.Time, error) {
 	var ts time.Time
 	err := oi.db.QueryRow(
 		context.Background(),
-		"SELECT ts FROM bars WHERE s_id = $1 ORDER BY ts DESC LIMIT 1",
-		symbol,
+		`SELECT MIN(max_ts) AS global_last_ingested FROM (
+			SELECT MAX(ts) AS max_ts FROM bars GROUP BY s_id
+		) as max_bar`,
 	).Scan(&ts)
 	if err != nil && errors.Is(err, pgx.ErrNoRows) {
 		return ts, nil
