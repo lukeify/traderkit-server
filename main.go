@@ -26,7 +26,7 @@ func main() {
 	// Create an ingestor struct that uses `Polygon` as the ingestion data provider. Then backfill any unloaded data
 	//into the `bars` database table. This may not need to be done if the table is up to date. Alternatively, it may
 	//need to be completely done if the table is empty.
-	ohlcv.NewIngestor(db, pip.New()).Backfill([]string{"AAPL"})
+	ohlcv.NewIngestor(db, pip.New()).Backfill()
 
 	lis, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", 8080))
 	if err != nil {
