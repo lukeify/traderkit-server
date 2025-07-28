@@ -31,10 +31,12 @@ func New() *PolygonIngestion {
 	}
 }
 
-func (pi *PolygonIngestion) BackfilledData(symbols []string, ingestFrom time.Time) (pgx.CopyFromSource, error) {
-	// TODO: Support being agnostic about the flat file source, so we don't always need to retrieve from Polygon.
+func (pi *PolygonIngestion) BackfilledData(ingestFrom time.Time) (pgx.CopyFromSource, error) {
+	// TODO: Support being agnostic about the flat file source, so we don't always need to retrieve from Polygon, i.e.
+	//  we could retrieve from a local CSV file.
 	// TODO: Support picking up backfilling from a partially backfilled polygon flat file.
 	// TODO: Once flat files are exhausted, switch to REST API for backfilling.
+	// TODO: Support not backfilling data that has already been backfilled.
 
 	mc, err := minio.New(
 		"files.polygon.io",
@@ -177,6 +179,8 @@ func (pbs *polygonBackfillIter) openFlatFile() error {
 }
 
 func (pbs *polygonBackfillIter) readFromFlatFile() error {
+	// TODO: Read forwards to the ingestFrom time, discarding anything before that, which is the contract which
+	//  specifies where the backfill should start from.
 	var err error
 	pbs.row, err = pbs.csv.Read()
 
@@ -210,6 +214,9 @@ func (pbs *polygonBackfillIter) closeFlatFile() {
 		panic("After now!")
 	}
 }
+
+// TODO: Decouple the metrics from the polygon ingestion implementation. The polygon backfill iterator should provide
+//   values that the ingestion functionality can pick up and display from.
 
 type backfillMetrics struct {
 	fileName string
