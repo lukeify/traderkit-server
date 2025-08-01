@@ -8,39 +8,41 @@ import (
 	"slices"
 	"sort"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/jackc/pgx/v5"
 )
 
 // New creates a new database connection, initializes the `migrations` table if it doesn't exist,
 // and then runs any migrations that haven't already been applied.
-func New() *pgx.Conn {
+func New() *pgxpool.Pool {
 	dbUrl := os.Getenv("DATABASE_URL")
-	conn, err := pgx.Connect(context.Background(), dbUrl)
+	pool, err := pgxpool.New(context.Background(), dbUrl)
 	if err != nil {
 		fmt.Printf("Unable to connect to database: %v\n", err)
 		os.Exit(1)
 	}
 
-	_, err = conn.Exec(context.Background(), "CREATE TABLE IF NOT EXISTS migrations (name VARCHAR(255))")
+	_, err = pool.Exec(context.Background(), "CREATE TABLE IF NOT EXISTS migrations (name VARCHAR(255))")
 	if err != nil {
 		fmt.Printf("Unable to create migrations table: %v\n", err)
 		os.Exit(1)
 	}
 
-	runMigrations(conn)
+	runMigrations(pool)
 
-	return conn
+	return pool
 }
 
 // runMigrations gathers the `.sql` files in the migration directory, retrieves the applied migrations from the
 // database, and then compares
-func runMigrations(conn *pgx.Conn) {
+func runMigrations(pool *pgxpool.Pool) {
 	allMigrations, err := filepath.Glob("./migrations/*.sql")
 	if err != nil {
 		fmt.Printf("Unable to read migrations directory: %v\n", err)
 	}
 
-	rows, err := conn.Query(context.Background(), "SELECT * FROM migrations")
+	rows, err := pool.Query(context.Background(), "SELECT * FROM migrations")
 	if err != nil {
 		fmt.Printf("Unable to read migrations from table: %v\n", err)
 	}
@@ -56,14 +58,14 @@ func runMigrations(conn *pgx.Conn) {
 	unappliedMigrations := migrationDifference(allMigrations, appliedMigrations)
 
 	for _, file := range unappliedMigrations {
-		executeMigrationFile(conn, file)
+		executeMigrationFile(pool, file)
 	}
 }
 
 // executeMigrationFile reads the contents of a migration file and applies to against the database using the provided
 // connection. It also inserts a record of the migration into the `migrations` table to track that the migration has
 // been applied.
-func executeMigrationFile(conn *pgx.Conn, fileName string) {
+func executeMigrationFile(pool *pgxpool.Pool, fileName string) {
 	contents, err := os.ReadFile(fileName)
 	if err != nil {
 		fmt.Printf("Unable to read unapplied migration file %s: %v\n", fileName, err)
@@ -71,7 +73,7 @@ func executeMigrationFile(conn *pgx.Conn, fileName string) {
 	}
 
 	// Initiate a transaction, rolling back after the method completes.
-	tx, err := conn.Begin(context.Background())
+	tx, err := pool.Begin(context.Background())
 	if err != nil {
 		fmt.Printf("Unable to begin transaction for migration %s: %v\n", fileName, err)
 		os.Exit(1)
