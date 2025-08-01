@@ -9,12 +9,13 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"traderkit-server/utils"
 )
 
 type Ingestion struct {
-	db       *pgx.Conn
+	db       *pgxpool.Pool
 	provider IngestionProvider
 }
 
@@ -22,7 +23,7 @@ type IngestionProvider interface {
 	BackfilledData(symbols []string, ingestFrom time.Time) (pgx.CopyFromSource, error)
 }
 
-func NewIngestor(db *pgx.Conn, provider IngestionProvider) *Ingestion {
+func NewIngestor(db *pgxpool.Pool, provider IngestionProvider) *Ingestion {
 	return &Ingestion{
 		db:       db,
 		provider: provider,
