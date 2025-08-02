@@ -14,22 +14,28 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"traderkit-server/utils"
+	"traderkit-server/utils/progress_printer"
 )
 
 type Ingestion struct {
 	db       *pgxpool.Pool
+	metrics  *Metrics
 	provider IngestionProvider
 }
 
 // TODO: Optionally provide the ability to backfill only on specific symbols.
 
 type IngestionProvider interface {
-	BackfilledData(ingestFrom time.Time) (pgx.CopyFromSource, error)
+	Backfill(ingestFrom time.Time) (pgx.CopyFromSource, error)
+	SetMetrics(metrics *Metrics)
 }
 
 func NewIngestor(db *pgxpool.Pool, provider IngestionProvider) *Ingestion {
+	m := Metrics{}
+	provider.SetMetrics(&m)
 	return &Ingestion{
 		db:       db,
+		metrics:  &m,
 		provider: provider,
 	}
 }
@@ -47,6 +53,14 @@ func NewIngestor(db *pgxpool.Pool, provider IngestionProvider) *Ingestion {
 // valid range, then the backfill will begin from the starting bound of the range, using `UPSERT` ergonomics, and then
 // `COPY FROM` following the end of the range.
 func (oi *Ingestion) Backfill() error {
+	pp := progress_printer.NewProgressPrinter(os.Stdout)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		pp.Complete("Done")
+	}()
+	oi.metrics.StartPrinting(ctx, pp)
+
 	pfr, err := oi.partiallyFilledRange()
 	if err != nil {
 		return err
@@ -66,7 +80,7 @@ func (oi *Ingestion) Backfill() error {
 		ingestFrom = *pfr.FilledBefore
 	}
 
-	iter, err := oi.provider.BackfilledData(ingestFrom)
+	iter, err := oi.provider.Backfill(ingestFrom)
 	if err != nil {
 		return err
 	}
@@ -87,9 +101,6 @@ func (oi *Ingestion) Backfill() error {
 		defer wg.Done()
 		defer close(copyFromCh)
 		defer close(upsertCh)
-		defer (func() {
-			fmt.Printf("Processed %d rows via COPY FROM and %d rows via UPSERT.\n", copyFromCount, upsertCount)
-		})()
 
 		// If the bar timestamp is within the range of already ingested data (inclusive), then an upsert is
 		// required because it cannot be guaranteed that the bar is not already in the database. A type assertion
@@ -113,7 +124,7 @@ func (oi *Ingestion) Backfill() error {
 
 	go func() {
 		defer wg.Done()
-		oi.processViaCopyFrom(copyFromCh)
+		err := oi.processViaCopyFrom(copyFromCh)
 		if err != nil {
 			errCh <- fmt.Errorf("could not process via COPY FROM: %#v", err)
 		}
@@ -159,9 +170,13 @@ func (oi *Ingestion) processViaUpsert(dataCh <-chan []any) error {
 	for {
 		values, ok := <-dataCh
 		// The channel is closed, perform the final insertion
-		if !ok && len(batch) > 0 {
-			err := oi.executeUpsert(batch)
-			return err
+		if !ok {
+			if len(batch) > 0 {
+				err := oi.executeUpsert(batch)
+				return err
+			}
+			// TODO: It's assumed there is no error here.
+			return nil
 		}
 
 		batch = append(batch, values)
