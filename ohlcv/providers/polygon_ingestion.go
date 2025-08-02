@@ -132,7 +132,14 @@ func (pbs *polygonBackfillIter) Err() error {
 
 // Polygon's flat file naming structure is YYYY-MM-DD, accessible as a gzipped CSV file. The directory this flat file
 // is placed under is the` minute_aggs_v1` directory, with year and month subdirectories.
-func (pbs *polygonBackfillIter) toFlatFileName(t time.Time) string {
+func (pbi *polygonBackfillIter) toFlatFileName(t time.Time) string {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		panic(err)
+	}
+
+	t = t.In(loc)
+
 	return path.Join(
 		"us_stocks_sip",
 		"minute_aggs_v1",
