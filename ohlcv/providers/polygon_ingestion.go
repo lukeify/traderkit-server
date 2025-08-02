@@ -7,12 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path"
 	"strconv"
 	"time"
 
-	"traderkit-server/utils/progress_printer"
+	"traderkit-server/ohlcv"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/minio/minio-go/v7"
@@ -22,6 +23,7 @@ import (
 
 // PolygonIngestion conforms to the `IngestionProvider` interface.
 type PolygonIngestion struct {
+	m      *ohlcv.Metrics
 	client *polygon.Client
 }
 
@@ -31,14 +33,11 @@ func New() *PolygonIngestion {
 	}
 }
 
-func (pi *PolygonIngestion) BackfilledData(ingestFrom time.Time) (pgx.CopyFromSource, error) {
+func (pi *PolygonIngestion) Backfill(ingestFrom time.Time) (pgx.CopyFromSource, error) {
 	// TODO: Support being agnostic about the flat file source, so we don't always need to retrieve from Polygon, i.e.
 	//  we could retrieve from a local CSV file.
-	// TODO: Support picking up backfilling from a partially backfilled polygon flat file.
 	// TODO: Once flat files are exhausted, switch to REST API for backfilling.
-	// TODO: Support not backfilling data that has already been backfilled.
-
-	mc, err := minio.New(
+	s3, err := minio.New(
 		"files.polygon.io",
 		&minio.Options{
 			Creds: credentials.NewStaticV4(
@@ -49,19 +48,22 @@ func (pi *PolygonIngestion) BackfilledData(ingestFrom time.Time) (pgx.CopyFromSo
 			Secure: true,
 		})
 	if err != nil {
-		panic(fmt.Sprintf("Error instantiating MinIO client: %v\n", err))
+		log.Fatalf("Error instantiating MinIO client: %v\n", err)
 	}
 
 	return &polygonBackfillIter{
-		pp:         progress_printer.NewProgressPrinter(os.Stdout),
-		s3:         mc,
+		m:          pi.m,
+		s3:         s3,
 		ingestFrom: ingestFrom,
-		metrics:    backfillMetrics{},
 	}, nil
 }
 
+func (pi *PolygonIngestion) SetMetrics(m *ohlcv.Metrics) {
+	pi.m = m
+}
+
 type polygonBackfillIter struct {
-	pp         *progress_printer.ProgressPrinter
+	m          *ohlcv.Metrics
 	s3         *minio.Client
 	ingestFrom time.Time
 	obj        *minio.Object
@@ -69,7 +71,6 @@ type polygonBackfillIter struct {
 	csv        *csv.Reader
 	row        []string
 	err        error
-	metrics    backfillMetrics
 }
 
 // Next prepares the next row of data to be read for backfilling. Data is ready sequentially from the Polygon's
@@ -77,57 +78,61 @@ type polygonBackfillIter struct {
 // Following this, the iterator switches to reading from the REST API for un-backfilled data that is not available in a
 // flatfile yet (a flatfile for the yesterday's data is not published until 11AM ET the following day).
 //
-// If the backfill has not begun, then `pbs.gz` will be `nil`, and opening a flatfile corresponding to the `ingestFrom`
+// If the backfill has not begun, then `pbi.gz` will be `nil`, and opening a flatfile corresponding to the `ingestFrom`
 // date will be attempted.
-func (pbs *polygonBackfillIter) Next() bool {
-	if pbs.gz == nil {
-		// TODO: This is a roundabout way of having openFlatFile have access to the file name. It should be passed in
-		//   as a param.
-		pbs.metrics.setFileName(pbs.toFlatFileName(pbs.ingestFrom))
-		err := pbs.openFlatFile()
+func (pbi *polygonBackfillIter) Next() bool {
+	// TODO: Make this a helper method
+	if pbi.gz == nil {
+		// If `openFlatFile` returns an error, it will be because the flat file does not exist on the server, so we
+		// should switch to using the REST API fo continue to backfill.
+		err := pbi.openFlatFile(pbi.toFlatFileName(pbi.ingestFrom))
 		if err != nil {
-			// TODO: This is assumed to be that the next flat file does not exist, switch to ingesting from the
-			//   REST API.
 			return false
 		}
 	}
 
-	err := pbs.readFromFlatFile()
+	err := pbi.readFromFlatFile()
 	if err == io.EOF {
-		pbs.closeFlatFile()
-		return pbs.Next()
+		pbi.closeFlatFile()
+		err = pbi.incrementDate()
+		if err != nil {
+			return false
+		}
+		return pbi.Next()
+	} else if err != nil {
+		log.Fatal("non-EOF error from reading from flat file: ", err)
 	}
 
 	return true
 }
 
-func (pbs *polygonBackfillIter) Values() ([]any, error) {
+func (pbi *polygonBackfillIter) Values() ([]any, error) {
 	// Parse the CSV row into the expected values provided by polygon.
 	// Extract ticker symbol
-	sId := pbs.row[0]
-	pbs.metrics.ingesting(sId)
-	pbs.pp.Update(pbs.metrics.get())
+	sId := pbi.row[0]
+	pbi.m.IngestRow(sId)
 
 	// Parse numeric values
-	v, _ := strconv.ParseUint(pbs.row[1], 10, 32)
-	o, _ := strconv.ParseFloat(pbs.row[2], 32)
-	c, _ := strconv.ParseFloat(pbs.row[3], 32)
-	h, _ := strconv.ParseFloat(pbs.row[4], 32)
-	l, _ := strconv.ParseFloat(pbs.row[5], 32)
+	v, _ := strconv.ParseUint(pbi.row[1], 10, 32)
+	o, _ := strconv.ParseFloat(pbi.row[2], 32)
+	c, _ := strconv.ParseFloat(pbi.row[3], 32)
+	h, _ := strconv.ParseFloat(pbi.row[4], 32)
+	l, _ := strconv.ParseFloat(pbi.row[5], 32)
 
 	// Parse timestamp (nanoseconds since epoch)
-	windowStartNs, _ := strconv.ParseUint(pbs.row[6], 10, 64)
+	windowStartNs, _ := strconv.ParseUint(pbi.row[6], 10, 64)
 	ts := time.Unix(0, int64(windowStartNs))
 
 	// Parse the transaction count
-	txns, _ := strconv.ParseUint(pbs.row[7], 10, 32)
+	txns, _ := strconv.ParseUint(pbi.row[7], 10, 32)
 
 	// Return values in order matching the DB columns.
 	return []any{sId, ts, o, h, l, c, v, txns}, nil
 }
 
-func (pbs *polygonBackfillIter) Err() error {
-	return pbs.err
+func (pbi *polygonBackfillIter) Err() error {
+	// TODO: Find out how to use this method.
+	return pbi.err
 }
 
 // Polygon's flat file naming structure is YYYY-MM-DD, accessible as a gzipped CSV file. The directory this flat file
@@ -135,7 +140,7 @@ func (pbs *polygonBackfillIter) Err() error {
 func (pbi *polygonBackfillIter) toFlatFileName(t time.Time) string {
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
-		panic(err)
+		log.Fatalf("[Fatal] Error loading timezone: %v\n", err)
 	}
 
 	t = t.In(loc)
@@ -150,96 +155,94 @@ func (pbi *polygonBackfillIter) toFlatFileName(t time.Time) string {
 }
 
 // openFlatFile will open the flatfile that corresponds to the `ingestFrom` date currently stored in the struct.
-func (pbs *polygonBackfillIter) openFlatFile() error {
+func (pbi *polygonBackfillIter) openFlatFile(fileName string) error {
 	var err error
-	pbs.obj, err = pbs.s3.GetObject(
+	pbi.obj, err = pbi.s3.GetObject(
 		context.Background(),
 		"flatfiles",
-		pbs.metrics.fileName,
+		fileName,
 		minio.GetObjectOptions{},
 	)
 	if err != nil {
-		panic(fmt.Sprintf("[Error] pbs.s3.GetObject() error: %v\n", err))
+		log.Fatalf("[Fatal] pbi.s3.GetObject() error: %v\n", err)
 	}
+	pbi.m.SetSource(fileName)
 
 	// If the flatfile does not exist on the server (such as because it hasn't been uploaded yet), this is where the
 	// error will be encountered—calling minio.GetObject() merely instantiates an object instance, it doesn't fetch it.
-	pbs.gz, err = gzip.NewReader(pbs.obj)
+	pbi.gz, err = gzip.NewReader(pbi.obj)
 	if err != nil {
-		// TODO: Close pbs.obj here.
+		// TODO: Close pbi.obj here.
 		var minioErr minio.ErrorResponse
 		if errors.As(err, &minioErr) && (minioErr.StatusCode == 403 || minioErr.StatusCode == 404) {
+			fmt.Printf(
+				"[Warning] Flat file %s does not exist on the server %d, skipping.\n",
+				fileName,
+				minioErr.StatusCode,
+			)
 			return err
 		} else {
-			panic(fmt.Sprintf("[Error] gzip.NewReader() error: %v\n", err))
+			log.Fatalf("[Fatal] gzip.NewReader() error: %v\n", err)
 		}
 	}
 
-	pbs.csv = csv.NewReader(pbs.gz)
+	pbi.csv = csv.NewReader(pbi.gz)
 	// Read the first row to ignore the header.
-	_, err = pbs.csv.Read()
+	_, err = pbi.csv.Read()
 	if err != nil {
-		panic(fmt.Sprintf("[Error] csv.Read() error reading header row: %#v\n", err))
+		log.Fatalf("[Fatal] csv.Read() error reading header row: %#v\n", err)
 	}
 
 	return nil
 }
 
-func (pbs *polygonBackfillIter) readFromFlatFile() error {
-	// TODO: Read forwards to the ingestFrom time, discarding anything before that, which is the contract which
-	//  specifies where the backfill should start from.
+// readFromFlatFile reads rows until an error is received, or a row is encountered that is equal to or after the
+// `ingestFrom` time (rows before the `ingestFrom` time are discarded as they are already stored in the database).
+func (pbi *polygonBackfillIter) readFromFlatFile() error {
 	var err error
-	pbs.row, err = pbs.csv.Read()
+	for {
+		pbi.row, err = pbi.csv.Read()
+		if err != nil {
+			break
+		}
+
+		windowStartNs, _ := strconv.ParseUint(pbi.row[6], 10, 64)
+		ts := time.Unix(0, int64(windowStartNs))
+
+		if ts.Equal(pbi.ingestFrom) || ts.After(pbi.ingestFrom) {
+			break
+		}
+		pbi.m.SkipRow()
+	}
 
 	if err == io.EOF {
 		// TODO: Write a comment to the progress printer.
-		// pbs.pp.Complete("Ingestion complete.")
 		return err
 	}
 	if err != nil {
-		panic(fmt.Sprintf("Row read error %#v\n", err))
+		log.Fatalf("[Fatal] row read error %#v\n", err)
 	}
 
 	return nil
 }
 
-func (pbs *polygonBackfillIter) closeFlatFile() {
-	err := pbs.gz.Close()
-	pbs.gz = nil
+func (pbi *polygonBackfillIter) closeFlatFile() {
+	err := pbi.gz.Close()
+	pbi.gz = nil
 	if err != nil {
-		panic("[Error] pbs.gz.Close(): " + err.Error())
+		log.Fatalf("[Fatal] gzip.Close() %#v\n", err)
 	}
 
-	err = pbs.obj.Close()
+	err = pbi.obj.Close()
 	if err != nil {
-		panic("[Error] pbs.obj.Close(): " + err.Error())
-	}
-
-	// TODO: Handle scenarios where the date advancement leads to today's date.
-	pbs.ingestFrom = pbs.ingestFrom.AddDate(0, 0, 1)
-	if pbs.ingestFrom.After(time.Now()) {
-		panic("After now!")
+		log.Fatalf("[Fatal] minio.Object.Close() %#v\n", err)
 	}
 }
 
-// TODO: Decouple the metrics from the polygon ingestion implementation. The polygon backfill iterator should provide
-//   values that the ingestion functionality can pick up and display from.
-
-type backfillMetrics struct {
-	fileName string
-	ticker   string
-	barCount int
-}
-
-func (bm *backfillMetrics) setFileName(name string) {
-	bm.fileName = name
-}
-
-func (bm *backfillMetrics) ingesting(ticker string) {
-	bm.ticker = ticker
-	bm.barCount++
-}
-
-func (bm *backfillMetrics) get() string {
-	return fmt.Sprintf("[%s] %d bars ingested (current ticker: %s)", bm.fileName, bm.barCount, bm.ticker)
+func (pbi *polygonBackfillIter) incrementDate() error {
+	pbi.ingestFrom = pbi.ingestFrom.AddDate(0, 0, 1)
+	if pbi.ingestFrom.After(time.Now()) {
+		return fmt.Errorf("cannot advance past current date")
+	}
+	return nil
 }
