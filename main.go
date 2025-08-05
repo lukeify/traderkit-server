@@ -8,7 +8,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	"traderkit-server/apis/health_checks"
+	healthChecksApi "traderkit-server/apis/health_checks"
 	"traderkit-server/utils"
 )
 
@@ -24,7 +24,7 @@ func main() {
 
 	var opts []grpc.ServerOption
 	grpcServer := grpc.NewServer(opts...)
-	apis_health_checks.RegisterHealthChecksServer(grpcServer, &apis_health_checks.HealthChecksServerImpl{})
+	healthChecksApi.RegisterHealthChecksServer(grpcServer, &healthChecksApi.HealthChecksServerImpl{})
 	err = grpcServer.Serve(lis)
 	if err != nil {
 		log.Fatalf("failed to serve: %v", err)
