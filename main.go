@@ -1,23 +1,30 @@
 package main
 
 import (
+	"fmt"
 	"log"
+	"net"
 	"os"
 
-	"traderkit-server/utils"
+	"google.golang.org/grpc"
 
-	"github.com/gofiber/fiber/v2"
+	"traderkit-server/utils"
 )
 
 func main() {
 	if err := utils.LoadEnvFile(); err != nil {
 		os.Exit(1)
 	}
-	app := fiber.New()
 
-	app.Get("/", func(c *fiber.Ctx) error {
-		return c.SendString("Hello, World!")
-	})
+	lis, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", 8080))
+	if err != nil {
+		log.Fatalf("failed to listen: %v", err)
+	}
 
-	log.Fatal(app.Listen(":3000"))
+	var opts []grpc.ServerOption
+	grpcServer := grpc.NewServer(opts...)
+	err = grpcServer.Serve(lis)
+	if err != nil {
+		log.Fatalf("failed to serve: %v", err)
+	}
 }
