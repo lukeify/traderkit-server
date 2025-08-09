@@ -1,4 +1,4 @@
-package providers
+package polygon
 
 import (
 	"compress/gzip"
@@ -8,61 +8,16 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"path"
 	"strconv"
 	"time"
 
 	"traderkit-server/ohlcv"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
-	"github.com/polygon-io/client-go/rest"
 )
 
-// PolygonIngestion conforms to the `IngestionProvider` interface.
-type PolygonIngestion struct {
-	m      *ohlcv.Metrics
-	client *polygon.Client
-}
-
-func New() *PolygonIngestion {
-	return &PolygonIngestion{
-		client: polygon.New(os.Getenv("POLYGON_API_KEY")),
-	}
-}
-
-func (pi *PolygonIngestion) Backfill(ingestFrom time.Time) (pgx.CopyFromSource, error) {
-	// TODO: Support being agnostic about the flat file source, so we don't always need to retrieve from Polygon, i.e.
-	//  we could retrieve from a local CSV file.
-	// TODO: Once flat files are exhausted, switch to REST API for backfilling.
-	s3, err := minio.New(
-		"files.polygon.io",
-		&minio.Options{
-			Creds: credentials.NewStaticV4(
-				os.Getenv("POLYGON_FLAT_FILES_ACCESS_KEY_ID"),
-				os.Getenv("POLYGON_FLAT_FILES_SECRET_ACCESS_KEY"),
-				"",
-			),
-			Secure: true,
-		})
-	if err != nil {
-		log.Fatalf("Error instantiating MinIO client: %v\n", err)
-	}
-
-	return &polygonBackfillIter{
-		m:          pi.m,
-		s3:         s3,
-		ingestFrom: ingestFrom,
-	}, nil
-}
-
-func (pi *PolygonIngestion) SetMetrics(m *ohlcv.Metrics) {
-	pi.m = m
-}
-
-type polygonBackfillIter struct {
+type backfillIterator struct {
 	m          *ohlcv.Metrics
 	s3         *minio.Client
 	ingestFrom time.Time
@@ -78,27 +33,27 @@ type polygonBackfillIter struct {
 // Following this, the iterator switches to reading from the REST API for un-backfilled data that is not available in a
 // flatfile yet (a flatfile for the yesterday's data is not published until 11AM ET the following day).
 //
-// If the backfill has not begun, then `pbi.gz` will be `nil`, and opening a flatfile corresponding to the `ingestFrom`
+// If the backfill has not begun, then `bi.gz` will be `nil`, and opening a flatfile corresponding to the `ingestFrom`
 // date will be attempted.
-func (pbi *polygonBackfillIter) Next() bool {
+func (bi *backfillIterator) Next() bool {
 	// TODO: Make this a helper method
-	if pbi.gz == nil {
+	if bi.gz == nil {
 		// If `openFlatFile` returns an error, it will be because the flat file does not exist on the server, so we
 		// should switch to using the REST API fo continue to backfill.
-		err := pbi.openFlatFile(pbi.toFlatFileName(pbi.ingestFrom))
+		err := bi.openFlatFile(bi.toFlatFileName(bi.ingestFrom))
 		if err != nil {
 			return false
 		}
 	}
 
-	err := pbi.readFromFlatFile()
+	err := bi.readFromFlatFile()
 	if err == io.EOF {
-		pbi.closeFlatFile()
-		err = pbi.incrementDate()
+		bi.closeFlatFile()
+		err = bi.incrementDate()
 		if err != nil {
 			return false
 		}
-		return pbi.Next()
+		return bi.Next()
 	} else if err != nil {
 		log.Fatal("non-EOF error from reading from flat file: ", err)
 	}
@@ -106,38 +61,38 @@ func (pbi *polygonBackfillIter) Next() bool {
 	return true
 }
 
-func (pbi *polygonBackfillIter) Values() ([]any, error) {
+func (bi *backfillIterator) Values() ([]any, error) {
 	// Parse the CSV row into the expected values provided by polygon.
 	// Extract ticker symbol
-	sId := pbi.row[0]
-	pbi.m.IngestRow(sId)
+	sId := bi.row[0]
+	bi.m.IngestRow(sId)
 
 	// Parse numeric values
-	v, _ := strconv.ParseUint(pbi.row[1], 10, 32)
-	o, _ := strconv.ParseFloat(pbi.row[2], 32)
-	c, _ := strconv.ParseFloat(pbi.row[3], 32)
-	h, _ := strconv.ParseFloat(pbi.row[4], 32)
-	l, _ := strconv.ParseFloat(pbi.row[5], 32)
+	v, _ := strconv.ParseUint(bi.row[1], 10, 32)
+	o, _ := strconv.ParseFloat(bi.row[2], 32)
+	c, _ := strconv.ParseFloat(bi.row[3], 32)
+	h, _ := strconv.ParseFloat(bi.row[4], 32)
+	l, _ := strconv.ParseFloat(bi.row[5], 32)
 
 	// Parse timestamp (nanoseconds since epoch)
-	windowStartNs, _ := strconv.ParseUint(pbi.row[6], 10, 64)
+	windowStartNs, _ := strconv.ParseUint(bi.row[6], 10, 64)
 	ts := time.Unix(0, int64(windowStartNs))
 
 	// Parse the transaction count
-	txns, _ := strconv.ParseUint(pbi.row[7], 10, 32)
+	txns, _ := strconv.ParseUint(bi.row[7], 10, 32)
 
 	// Return values in order matching the DB columns.
 	return []any{sId, ts, o, h, l, c, v, txns}, nil
 }
 
-func (pbi *polygonBackfillIter) Err() error {
+func (bi *backfillIterator) Err() error {
 	// TODO: Find out how to use this method.
-	return pbi.err
+	return bi.err
 }
 
 // Polygon's flat file naming structure is YYYY-MM-DD, accessible as a gzipped CSV file. The directory this flat file
 // is placed under is the` minute_aggs_v1` directory, with year and month subdirectories.
-func (pbi *polygonBackfillIter) toFlatFileName(t time.Time) string {
+func (bi *backfillIterator) toFlatFileName(t time.Time) string {
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		log.Fatalf("[Fatal] Error loading timezone: %v\n", err)
@@ -155,24 +110,24 @@ func (pbi *polygonBackfillIter) toFlatFileName(t time.Time) string {
 }
 
 // openFlatFile will open the flatfile that corresponds to the `ingestFrom` date currently stored in the struct.
-func (pbi *polygonBackfillIter) openFlatFile(fileName string) error {
+func (bi *backfillIterator) openFlatFile(fileName string) error {
 	var err error
-	pbi.obj, err = pbi.s3.GetObject(
+	bi.obj, err = bi.s3.GetObject(
 		context.Background(),
 		"flatfiles",
 		fileName,
 		minio.GetObjectOptions{},
 	)
 	if err != nil {
-		log.Fatalf("[Fatal] pbi.s3.GetObject() error: %v\n", err)
+		log.Fatalf("[Fatal] bi.s3.GetObject() error: %v\n", err)
 	}
-	pbi.m.SetSource(fileName)
+	bi.m.SetSource(fileName)
 
 	// If the flatfile does not exist on the server (such as because it hasn't been uploaded yet), this is where the
 	// error will be encountered—calling minio.GetObject() merely instantiates an object instance, it doesn't fetch it.
-	pbi.gz, err = gzip.NewReader(pbi.obj)
+	bi.gz, err = gzip.NewReader(bi.obj)
 	if err != nil {
-		// TODO: Close pbi.obj here.
+		// TODO: Close bi.obj here.
 		var minioErr minio.ErrorResponse
 		if errors.As(err, &minioErr) && (minioErr.StatusCode == 403 || minioErr.StatusCode == 404) {
 			fmt.Printf(
@@ -186,9 +141,9 @@ func (pbi *polygonBackfillIter) openFlatFile(fileName string) error {
 		}
 	}
 
-	pbi.csv = csv.NewReader(pbi.gz)
+	bi.csv = csv.NewReader(bi.gz)
 	// Read the first row to ignore the header.
-	_, err = pbi.csv.Read()
+	_, err = bi.csv.Read()
 	if err != nil {
 		log.Fatalf("[Fatal] csv.Read() error reading header row: %#v\n", err)
 	}
@@ -198,21 +153,21 @@ func (pbi *polygonBackfillIter) openFlatFile(fileName string) error {
 
 // readFromFlatFile reads rows until an error is received, or a row is encountered that is equal to or after the
 // `ingestFrom` time (rows before the `ingestFrom` time are discarded as they are already stored in the database).
-func (pbi *polygonBackfillIter) readFromFlatFile() error {
+func (bi *backfillIterator) readFromFlatFile() error {
 	var err error
 	for {
-		pbi.row, err = pbi.csv.Read()
+		bi.row, err = bi.csv.Read()
 		if err != nil {
 			break
 		}
 
-		windowStartNs, _ := strconv.ParseUint(pbi.row[6], 10, 64)
+		windowStartNs, _ := strconv.ParseUint(bi.row[6], 10, 64)
 		ts := time.Unix(0, int64(windowStartNs))
 
-		if ts.Equal(pbi.ingestFrom) || ts.After(pbi.ingestFrom) {
+		if ts.Equal(bi.ingestFrom) || ts.After(bi.ingestFrom) {
 			break
 		}
-		pbi.m.SkipRow()
+		bi.m.SkipRow()
 	}
 
 	if err == io.EOF {
@@ -226,22 +181,22 @@ func (pbi *polygonBackfillIter) readFromFlatFile() error {
 	return nil
 }
 
-func (pbi *polygonBackfillIter) closeFlatFile() {
-	err := pbi.gz.Close()
-	pbi.gz = nil
+func (bi *backfillIterator) closeFlatFile() {
+	err := bi.gz.Close()
+	bi.gz = nil
 	if err != nil {
 		log.Fatalf("[Fatal] gzip.Close() %#v\n", err)
 	}
 
-	err = pbi.obj.Close()
+	err = bi.obj.Close()
 	if err != nil {
 		log.Fatalf("[Fatal] minio.Object.Close() %#v\n", err)
 	}
 }
 
-func (pbi *polygonBackfillIter) incrementDate() error {
-	pbi.ingestFrom = pbi.ingestFrom.AddDate(0, 0, 1)
-	if pbi.ingestFrom.After(time.Now()) {
+func (bi *backfillIterator) incrementDate() error {
+	bi.ingestFrom = bi.ingestFrom.AddDate(0, 0, 1)
+	if bi.ingestFrom.After(time.Now()) {
 		return fmt.Errorf("cannot advance past current date")
 	}
 	return nil
