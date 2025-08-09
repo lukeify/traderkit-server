@@ -15,17 +15,27 @@ import (
 	"traderkit-server/ohlcv"
 
 	"github.com/minio/minio-go/v7"
+	"github.com/polygon-io/client-go/rest"
+)
+
+type BackfillSource int
+
+const (
+	FlatFiles BackfillSource = iota
+	RestAPI
 )
 
 type backfillIterator struct {
-	m          *ohlcv.Metrics
-	s3         *minio.Client
+	client     *polygon.Client
+	metrics    *ohlcv.Metrics
+	minio      *minio.Client
 	ingestFrom time.Time
 	obj        *minio.Object
-	gz         *gzip.Reader
-	csv        *csv.Reader
+	gzipReader *gzip.Reader
+	csvReader  *csv.Reader
 	row        []string
 	err        error
+	source     BackfillSource
 }
 
 // Next prepares the next row of data to be read for backfilling. Data is ready sequentially from the Polygon's
@@ -37,11 +47,12 @@ type backfillIterator struct {
 // date will be attempted.
 func (bi *backfillIterator) Next() bool {
 	// TODO: Make this a helper method
-	if bi.gz == nil {
+	if bi.gzipReader == nil {
 		// If `openFlatFile` returns an error, it will be because the flat file does not exist on the server, so we
 		// should switch to using the REST API fo continue to backfill.
 		err := bi.openFlatFile(bi.toFlatFileName(bi.ingestFrom))
 		if err != nil {
+			// TODO: Close any open resources after switching to REST API from flat file API.
 			return false
 		}
 	}
@@ -65,7 +76,7 @@ func (bi *backfillIterator) Values() ([]any, error) {
 	// Parse the CSV row into the expected values provided by polygon.
 	// Extract ticker symbol
 	sId := bi.row[0]
-	bi.m.IngestRow(sId)
+	bi.metrics.IngestRow(sId)
 
 	// Parse numeric values
 	v, _ := strconv.ParseUint(bi.row[1], 10, 32)
@@ -112,7 +123,7 @@ func (bi *backfillIterator) toFlatFileName(t time.Time) string {
 // openFlatFile will open the flatfile that corresponds to the `ingestFrom` date currently stored in the struct.
 func (bi *backfillIterator) openFlatFile(fileName string) error {
 	var err error
-	bi.obj, err = bi.s3.GetObject(
+	bi.obj, err = bi.minio.GetObject(
 		context.Background(),
 		"flatfiles",
 		fileName,
@@ -121,11 +132,11 @@ func (bi *backfillIterator) openFlatFile(fileName string) error {
 	if err != nil {
 		log.Fatalf("[Fatal] bi.s3.GetObject() error: %v\n", err)
 	}
-	bi.m.SetSource(fileName)
+	bi.metrics.SetSource(fileName)
 
 	// If the flatfile does not exist on the server (such as because it hasn't been uploaded yet), this is where the
 	// error will be encountered—calling minio.GetObject() merely instantiates an object instance, it doesn't fetch it.
-	bi.gz, err = gzip.NewReader(bi.obj)
+	bi.gzipReader, err = gzip.NewReader(bi.obj)
 	if err != nil {
 		// TODO: Close bi.obj here.
 		var minioErr minio.ErrorResponse
@@ -141,9 +152,9 @@ func (bi *backfillIterator) openFlatFile(fileName string) error {
 		}
 	}
 
-	bi.csv = csv.NewReader(bi.gz)
+	bi.csvReader = csv.NewReader(bi.gzipReader)
 	// Read the first row to ignore the header.
-	_, err = bi.csv.Read()
+	_, err = bi.csvReader.Read()
 	if err != nil {
 		log.Fatalf("[Fatal] csv.Read() error reading header row: %#v\n", err)
 	}
@@ -156,7 +167,7 @@ func (bi *backfillIterator) openFlatFile(fileName string) error {
 func (bi *backfillIterator) readFromFlatFile() error {
 	var err error
 	for {
-		bi.row, err = bi.csv.Read()
+		bi.row, err = bi.csvReader.Read()
 		if err != nil {
 			break
 		}
@@ -167,7 +178,7 @@ func (bi *backfillIterator) readFromFlatFile() error {
 		if ts.Equal(bi.ingestFrom) || ts.After(bi.ingestFrom) {
 			break
 		}
-		bi.m.SkipRow()
+		bi.metrics.SkipRow()
 	}
 
 	if err == io.EOF {
@@ -182,8 +193,8 @@ func (bi *backfillIterator) readFromFlatFile() error {
 }
 
 func (bi *backfillIterator) closeFlatFile() {
-	err := bi.gz.Close()
-	bi.gz = nil
+	err := bi.gzipReader.Close()
+	bi.gzipReader = nil
 	if err != nil {
 		log.Fatalf("[Fatal] gzip.Close() %#v\n", err)
 	}
