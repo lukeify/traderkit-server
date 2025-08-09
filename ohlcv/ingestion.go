@@ -2,10 +2,8 @@ package ohlcv
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -13,7 +11,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"traderkit-server/utils"
 	"traderkit-server/utils/progress_printer"
 )
 
@@ -61,26 +58,9 @@ func (oi *Ingestion) Backfill() error {
 	}()
 	oi.metrics.StartPrinting(ctx, pp)
 
-	pfr, err := oi.partiallyFilledRange()
-	if err != nil {
-		return err
-	}
-
-	// If no partially filled range is present (i.e. `pfr.Earliest` is `nil`), then the database is completely empty
-	// and backfilling shall start from the specified retention period.
-	var ingestFrom time.Time
-	if pfr.FilledBefore == nil {
-		// Determine what date we must backfill from.
-		n, err := strconv.Atoi(os.Getenv("RETENTION_PERIOD_DAYS"))
-		if err != nil || n < 0 || n > 255 {
-			n = 14
-		}
-		ingestFrom = utils.LastRetainedDay(time.Now(), uint8(n))
-	} else {
-		ingestFrom = *pfr.FilledBefore
-	}
-
-	iter, err := oi.provider.Backfill(ingestFrom)
+	// Compute the fill state of the database, and when to begin ingesting data from for backfilling.
+	fs := FillState{}
+	iter, err := oi.provider.Backfill(fs.IngestFrom(oi.db))
 	if err != nil {
 		return err
 	}
@@ -112,7 +92,7 @@ func (oi *Ingestion) Backfill() error {
 				errCh <- err
 			}
 
-			if pfr.Contains(values[1].(time.Time)) {
+			if fs.MayBeFilled(values[1].(time.Time)) {
 				upsertCount++
 				upsertCh <- values
 			} else {
@@ -189,31 +169,6 @@ func (oi *Ingestion) processViaUpsert(dataCh <-chan []any) error {
 			batch = batch[:0]
 		}
 	}
-}
-
-// partiallyFilledRange returns a `partiallyFilledRange` struct containing two bar timestamps that represent,
-// respectively:
-//
-// 1. The timestamp where bars before it have been definitely filled (and definitely exist), and
-// 2. Bars after the second timestamp that have never been filled (and do not exist yet).
-//
-// If a `pgx.ErrNoRows` is returned, then the partiallyFilledRange struct will contain `nil` values for both fields.
-func (oi *Ingestion) partiallyFilledRange() (partiallyFilledRange, error) {
-	rows, _ := oi.db.Query(
-		context.Background(),
-		`SELECT MIN(max_ts) AS earliest, MAX(max_ts) AS latest FROM (
-			SELECT MAX(ts) AS max_ts FROM bars GROUP BY s_id
-		) as max_bar`,
-	)
-	ir, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByPos[partiallyFilledRange])
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return partiallyFilledRange{}, nil
-		}
-		return ir, err
-	}
-	// TODO: Why can't `ir` be `nil` here?
-	return ir, nil
 }
 
 // executeUpsert performs a `INSERT INTO ... ON CONFLICT` query for rows that either might need to be updated or cannot
