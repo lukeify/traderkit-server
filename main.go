@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 
 	healthChecksApi "traderkit-server/apis/health_checks"
 	"traderkit-server/database"
@@ -15,6 +16,9 @@ import (
 )
 
 func main() {
+	if err := os.Setenv("TZ", ""); err != nil {
+		log.Fatal("Could not set timezone to UTC")
+	}
 	// Application startup: load environment variables, initialize a database connection, and backfill any data that
 	// has been missed since last startup.
 	if err := utils.LoadEnvFile(); err != nil {
