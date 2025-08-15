@@ -20,13 +20,16 @@ type Ingestion struct {
 }
 
 func New() *Ingestion {
-	return &Ingestion{client: polygon.New(os.Getenv("POLYGON_API_KEY"))}
+	// Increase the timeout of the HTTP client for `polygon` to avoid https://github.com/polygon-io/client-go/issues/508
+	pc := polygon.New(os.Getenv("POLYGON_API_KEY"))
+	pc.Client.HTTP.SetTimeout(60 * time.Second)
+
+	return &Ingestion{client: pc}
 }
 
 func (i *Ingestion) Backfill(ingestFrom time.Time) (pgx.CopyFromSource, error) {
 	// TODO: Support being agnostic about the flat file source, so we don't always need to retrieve from Polygon, i.e.
 	//  we could retrieve from a local CSV file.
-	// TODO: Once flat files are exhausted, switch to REST API for backfilling.
 	m, err := minio.New(
 		"files.polygon.io",
 		&minio.Options{
@@ -41,13 +44,17 @@ func (i *Ingestion) Backfill(ingestFrom time.Time) (pgx.CopyFromSource, error) {
 		log.Fatalf("Error instantiating MinIO client: %v\n", err)
 	}
 
-	return &backfillIterator{
+	bf := &backfillIterator{
 		client:     i.client,
 		metrics:    i.metrics,
-		minio:      m,
 		ingestFrom: ingestFrom,
 		source:     FlatFiles,
-	}, nil
+	}
+
+	bf.flatFiles = &flatFilesBackfill{parent: bf, minio: m}
+	bf.rest = &restBackfill{parent: bf}
+
+	return bf, nil
 }
 
 func (i *Ingestion) SetMetrics(m *ohlcv.Metrics) {
