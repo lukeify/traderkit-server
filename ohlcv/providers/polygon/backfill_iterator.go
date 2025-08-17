@@ -35,7 +35,7 @@ type backfillIterator struct {
 // date will be attempted.
 func (bi *backfillIterator) Next() bool {
 	if bi.rest.IsCold() {
-		bi.rest.WarmUp()
+		go bi.rest.WarmUp()
 	}
 
 	switch bi.source {

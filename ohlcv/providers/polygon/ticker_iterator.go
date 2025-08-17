@@ -3,13 +3,17 @@ package polygon
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/polygon-io/client-go/rest"
+	"github.com/polygon-io/client-go/rest/iter"
+	"github.com/polygon-io/client-go/rest/models"
 )
 
 type TickerIterator struct {
-	client  *polygon.Client
-	tickers chan string
+	client     *polygon.Client
+	tickerIter *iter.Iter[models.Ticker]
+	tickers    chan string
 }
 
 func NewTickerIterator(client *polygon.Client) *TickerIterator {
@@ -17,15 +21,22 @@ func NewTickerIterator(client *polygon.Client) *TickerIterator {
 	return &TickerIterator{
 		client:  client,
 		tickers: make(chan string, 20000),
+		tickerIter: client.ListTickers(
+			context.Background(),
+			models.ListTickersParams{}.WithMarket(models.AssetStocks).WithLimit(1000),
+		),
 	}
 }
 
-func (ti *TickerIterator) Close() {
+func (ti *TickerIterator) Accumulate() {
+	for ti.tickerIter.Next() {
+		// TODO: Improve selection logic for tickers when we only want to select from a certain number of tickers.
+		ti.tickers <- ti.tickerIter.Item().Ticker
+	}
+	if ti.tickerIter.Err() != nil {
+		log.Fatal(ti.tickerIter.Err())
+	}
 	close(ti.tickers)
-}
-
-func (ti *TickerIterator) Push(ticker string) {
-	ti.tickers <- ticker
 }
 
 // Read uses the functionality of `select` (https://go.dev/ref/spec#Select_statements) to wait until the `tfi.tickers`

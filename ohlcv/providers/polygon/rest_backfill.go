@@ -3,7 +3,6 @@ package polygon
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/polygon-io/client-go/rest/iter"
@@ -64,26 +63,7 @@ func (rb *restBackfill) IsCold() bool {
 
 func (rb *restBackfill) WarmUp() {
 	rb.tickerIter = NewTickerIterator(rb.parent.client)
-	go func() {
-		i := 0
-		tickerIter := rb.parent.client.ListTickers(
-			context.Background(),
-			models.ListTickersParams{}.WithMarket(models.AssetStocks).WithLimit(1000),
-		)
-		for tickerIter.Next() {
-			// TODO: Improve selection logic for tickers.
-			i++
-			if i == 10 {
-				break
-			}
-			rb.tickerIter.Push(tickerIter.Item().Ticker)
-		}
-		if tickerIter.Err() != nil {
-			log.Fatal(tickerIter.Err())
-		}
-		rb.tickerIter.Close()
-		println("Done fetching tickers")
-	}()
+	rb.tickerIter.Accumulate()
 }
 
 func (rb *restBackfill) instantiateAggIterator() error {
