@@ -11,23 +11,23 @@ import (
 )
 
 type restBackfill struct {
-	parent          *backfillIterator
-	tickerFetchIter *RestTickerFetchIterator
-	aggFetchIter    *iter.Iter[models.Agg]
-	ticker          string
-	row             models.Agg
+	parent     *backfillIterator
+	tickerIter *TickerIterator
+	aggIter    *iter.Iter[models.Agg]
+	ticker     string
+	row        models.Agg
 }
 
 func (rb *restBackfill) Next() bool {
-	// TODO: How do we check we're waiting until the tickerFetchIter has a value ready?
-	if rb.tickerFetchIter != nil {
+	// TODO: How do we check we're waiting until the tickerIter has a value ready?
+	if rb.tickerIter != nil {
 		// A list of aggregates for a current ticker has already been fetched, we can read directly from the iterator.
-		if rb.aggFetchIter != nil && rb.aggFetchIter.Next() {
-			rb.row = rb.aggFetchIter.Item()
+		if rb.aggIter != nil && rb.aggIter.Next() {
+			rb.row = rb.aggIter.Item()
 			fmt.Printf("%#v\n", rb.row)
 			return true
 		}
-		println("aggFetchIter is nil, or has no next value")
+		println("aggIter is nil, or has no next value")
 		err := rb.instantiateAggIterator()
 		fmt.Printf("eror: %v\n", err)
 		if err != nil {
@@ -59,11 +59,11 @@ func (rb *restBackfill) Values() ([]any, error) {
 }
 
 func (rb *restBackfill) IsCold() bool {
-	return rb.tickerFetchIter == nil
+	return rb.tickerIter == nil
 }
 
 func (rb *restBackfill) WarmUp() {
-	rb.tickerFetchIter = NewRestTickerFetchIterator(rb.parent.client)
+	rb.tickerIter = NewTickerIterator(rb.parent.client)
 	go func() {
 		i := 0
 		tickerIter := rb.parent.client.ListTickers(
@@ -76,26 +76,26 @@ func (rb *restBackfill) WarmUp() {
 			if i == 10 {
 				break
 			}
-			rb.tickerFetchIter.Push(tickerIter.Item().Ticker)
+			rb.tickerIter.Push(tickerIter.Item().Ticker)
 		}
 		if tickerIter.Err() != nil {
 			log.Fatal(tickerIter.Err())
 		}
-		rb.tickerFetchIter.Close()
+		rb.tickerIter.Close()
 		println("Done fetching tickers")
 	}()
 }
 
 func (rb *restBackfill) instantiateAggIterator() error {
-	// TODO: Figure out how to tell if we're out of tickers in the tickerFetchIter.
-	// TODO: How do we check we're waiting until the tickerFetchIter has a value ready?
+	// TODO: Figure out how to tell if we're out of tickers in the tickerIter.
+	// TODO: How do we check we're waiting until the tickerIter has a value ready?
 	// TODO: We could also fetch the next ticker from the REST API while we're ingesting the current ticker.
-	return rb.tickerFetchIter.Read(context.Background(), func(ticker string) {
+	return rb.tickerIter.Read(context.Background(), func(ticker string) {
 		println("instantiateAggIterator for ticker:", ticker)
 		// Assign the ticker to a stateful field on the struct, because when `Values` is called, the `models.Aggs` `row`
 		// property has the `Ticker` field set to an empty string, which may be a bug.
 		rb.ticker = ticker
-		rb.aggFetchIter = rb.parent.client.ListAggs(
+		rb.aggIter = rb.parent.client.ListAggs(
 			context.Background(),
 			&models.ListAggsParams{
 				Ticker:     ticker,

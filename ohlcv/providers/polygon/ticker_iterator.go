@@ -7,33 +7,33 @@ import (
 	"github.com/polygon-io/client-go/rest"
 )
 
-type RestTickerFetchIterator struct {
+type TickerIterator struct {
 	client  *polygon.Client
 	tickers chan string
 }
 
-func NewRestTickerFetchIterator(client *polygon.Client) *RestTickerFetchIterator {
+func NewTickerIterator(client *polygon.Client) *TickerIterator {
 	// TODO: Is this buffer size appropriate? Currently it holds all U.S. equity tickers with space to spare.
-	return &RestTickerFetchIterator{
+	return &TickerIterator{
 		client:  client,
 		tickers: make(chan string, 20000),
 	}
 }
 
-func (rtfi *RestTickerFetchIterator) Close() {
-	close(rtfi.tickers)
+func (ti *TickerIterator) Close() {
+	close(ti.tickers)
 }
 
-func (rtfi *RestTickerFetchIterator) Push(ticker string) {
-	rtfi.tickers <- ticker
+func (ti *TickerIterator) Push(ticker string) {
+	ti.tickers <- ticker
 }
 
 // Read uses the functionality of `select` (https://go.dev/ref/spec#Select_statements) to wait until the `tfi.tickers`
 // channel has data available to read from (this is when the ticker fetchign retri
-func (rtfi *RestTickerFetchIterator) Read(ctx context.Context, fn func(string)) error {
+func (ti *TickerIterator) Read(ctx context.Context, fn func(string)) error {
 	// TODO: This used to have a `for` loop around it? Maybe it's not needed.
 	select {
-	case ticker, ok := <-rtfi.tickers:
+	case ticker, ok := <-ti.tickers:
 		if !ok {
 			// TODO: Describe under what scenario this would happen.
 			// This happens when the channel is closed.
