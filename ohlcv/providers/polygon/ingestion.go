@@ -27,7 +27,7 @@ func New() *Ingestion {
 	return &Ingestion{client: pc}
 }
 
-func (i *Ingestion) Backfill(ingestFrom time.Time) (pgx.CopyFromSource, error) {
+func (i *Ingestion) Backfill(ingestFrom time.Time, tickers map[string]struct{}) (pgx.CopyFromSource, error) {
 	// TODO: Support being agnostic about the flat file source, so we don't always need to retrieve from Polygon, i.e.
 	//  we could retrieve from a local CSV file.
 	m, err := minio.New(
@@ -48,6 +48,7 @@ func (i *Ingestion) Backfill(ingestFrom time.Time) (pgx.CopyFromSource, error) {
 		client:     i.client,
 		metrics:    i.metrics,
 		ingestFrom: ingestFrom,
+		tickers:    tickers,
 		source:     FlatFiles,
 	}
 

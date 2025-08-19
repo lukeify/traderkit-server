@@ -20,6 +20,7 @@ type backfillIterator struct {
 	client     *polygon.Client
 	metrics    *ohlcv.Metrics
 	ingestFrom time.Time
+	tickers    map[string]struct{}
 	source     BackfillSource
 	flatFiles  *flatFilesBackfill
 	rest       *restBackfill
@@ -35,7 +36,8 @@ type backfillIterator struct {
 // date will be attempted.
 func (bi *backfillIterator) Next() bool {
 	if bi.rest.IsCold() {
-		go bi.rest.WarmUp()
+		bi.rest.SetTickerSource()
+		go bi.rest.tickerSource.Accumulate()
 	}
 
 	switch bi.source {

@@ -10,25 +10,23 @@ import (
 )
 
 type restBackfill struct {
-	parent     *backfillIterator
-	tickerIter *TickerIterator
-	aggIter    *iter.Iter[models.Agg]
-	ticker     string
-	row        models.Agg
+	parent       *backfillIterator
+	tickerSource TickerSource
+	aggIter      *iter.Iter[models.Agg]
+	ticker       string
+	row          models.Agg
 }
 
 func (rb *restBackfill) Next() bool {
 	// TODO: How do we check we're waiting until the tickerIter has a value ready?
-	if rb.tickerIter != nil {
+	if rb.tickerSource != nil {
 		// A list of aggregates for a current ticker has already been fetched, we can read directly from the iterator.
 		if rb.aggIter != nil && rb.aggIter.Next() {
 			rb.row = rb.aggIter.Item()
-			fmt.Printf("%#v\n", rb.row)
 			return true
 		}
-		println("aggIter is nil, or has no next value")
 		err := rb.instantiateAggIterator()
-		fmt.Printf("eror: %v\n", err)
+		fmt.Printf("error: %v\n", err)
 		if err != nil {
 			println("Returning false from rest_backfill.Next()")
 			return false
@@ -58,19 +56,18 @@ func (rb *restBackfill) Values() ([]any, error) {
 }
 
 func (rb *restBackfill) IsCold() bool {
-	return rb.tickerIter == nil
+	return rb.tickerSource == nil
 }
 
-func (rb *restBackfill) WarmUp() {
-	rb.tickerIter = NewTickerIterator(rb.parent.client)
-	rb.tickerIter.Accumulate()
+func (rb *restBackfill) SetTickerSource() {
+	rb.tickerSource = NewRestTickerSource(rb.parent.client)
 }
 
 func (rb *restBackfill) instantiateAggIterator() error {
 	// TODO: Figure out how to tell if we're out of tickers in the tickerIter.
 	// TODO: How do we check we're waiting until the tickerIter has a value ready?
 	// TODO: We could also fetch the next ticker from the REST API while we're ingesting the current ticker.
-	return rb.tickerIter.Read(context.Background(), func(ticker string) {
+	return rb.tickerSource.Read(context.Background(), func(ticker string) {
 		println("instantiateAggIterator for ticker:", ticker)
 		// Assign the ticker to a stateful field on the struct, because when `Values` is called, the `models.Aggs` `row`
 		// property has the `Ticker` field set to an empty string, which may be a bug.
