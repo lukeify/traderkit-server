@@ -53,7 +53,8 @@ func (i *Ingestion) Backfill(ingestFrom time.Time, tickers map[string]struct{}) 
 	}
 
 	bf.flatFiles = &flatFilesBackfill{parent: bf, minio: m}
-	bf.rest = &restBackfill{parent: bf}
+	bf.rest = &restBackfill{parent: bf, tickerSource: NewRestTickerSource(i.client)}
+	go bf.rest.tickerSource.Accumulate()
 
 	return bf, nil
 }

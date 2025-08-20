@@ -35,11 +35,6 @@ type backfillIterator struct {
 // If the backfill has not begun, then `bi.gz` will be `nil`, and opening a flatfile corresponding to the `ingestFrom`
 // date will be attempted.
 func (bi *backfillIterator) Next() bool {
-	if bi.rest.IsCold() {
-		bi.rest.SetTickerSource()
-		go bi.rest.tickerSource.Accumulate()
-	}
-
 	switch bi.source {
 	case FlatFiles:
 		return bi.flatFiles.Next()

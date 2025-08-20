@@ -18,23 +18,18 @@ type restBackfill struct {
 }
 
 func (rb *restBackfill) Next() bool {
-	// TODO: How do we check we're waiting until the tickerIter has a value ready?
-	if rb.tickerSource != nil {
-		// A list of aggregates for a current ticker has already been fetched, we can read directly from the iterator.
-		if rb.aggIter != nil && rb.aggIter.Next() {
-			rb.row = rb.aggIter.Item()
-			return true
-		}
-		err := rb.instantiateAggIterator()
-		fmt.Printf("error: %v\n", err)
-		if err != nil {
-			println("Returning false from rest_backfill.Next()")
-			return false
-		}
-		return rb.Next()
+	// A list of aggregates for a current ticker has already been fetched, we can read directly from the iterator.
+	if rb.aggIter != nil && rb.aggIter.Next() {
+		rb.row = rb.aggIter.Item()
+		return true
 	}
-	println("false called")
-	return false
+	err := rb.instantiateAggIterator()
+	fmt.Printf("error: %v\n", err)
+	if err != nil {
+		println("Returning false from restBackfill.Next()")
+		return false
+	}
+	return rb.Next()
 }
 
 // Values takes both the `ticker` value from the struct and the current `row` (of type `models.Agg`) and returns a
@@ -55,17 +50,8 @@ func (rb *restBackfill) Values() ([]any, error) {
 	}, nil
 }
 
-func (rb *restBackfill) IsCold() bool {
-	return rb.tickerSource == nil
-}
-
-func (rb *restBackfill) SetTickerSource() {
-	rb.tickerSource = NewRestTickerSource(rb.parent.client)
-}
-
 func (rb *restBackfill) instantiateAggIterator() error {
 	// TODO: Figure out how to tell if we're out of tickers in the tickerIter.
-	// TODO: How do we check we're waiting until the tickerIter has a value ready?
 	// TODO: We could also fetch the next ticker from the REST API while we're ingesting the current ticker.
 	return rb.tickerSource.Read(context.Background(), func(ticker string) {
 		println("instantiateAggIterator for ticker:", ticker)
