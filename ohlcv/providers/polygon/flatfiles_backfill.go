@@ -151,22 +151,34 @@ func (ffb *flatFilesBackfill) openFlatFile() error {
 	return nil
 }
 
-// readFromFlatFile reads rows until an error is received, or a row is encountered that is equal to or after the
-// `ingestFrom` time (rows before the `ingestFrom` time are discarded as they are already stored in the database).
+// readFromFlatFile reads rows until it finds a row that can be inserted into the database. Rows that can be inserted
+// are from row reads that don't result in an error, have a predicate that indicates the row should be skipped, or rows
+// that are equal to or after the `ingestFrom` time (rows before the `ingestFrom` time are discarded as they are already
+// stored in the database).
 func (ffb *flatFilesBackfill) readFromFlatFile() error {
 	var err error
+
+	// Break either when there's an error, or an acceptable row that can be inserted.
 	for {
 		ffb.row, err = ffb.csvReader.Read()
 		if err != nil {
 			break
 		}
 
+		// Continue looping while the predicate indicates the row should be skipped.
+		if !ffb.parent.predicate(ffb.row[0]) {
+			ffb.parent.metrics.SkipRow()
+			continue
+		}
+
+		// Break if the row's timestamp is equal or after the `ingestFrom`
 		windowStartNs, _ := strconv.ParseUint(ffb.row[6], 10, 64)
 		ts := time.Unix(0, int64(windowStartNs))
 
 		if ts.Equal(ffb.parent.ingestFrom) || ts.After(ffb.parent.ingestFrom) {
 			break
 		}
+
 		ffb.parent.metrics.SkipRow()
 	}
 

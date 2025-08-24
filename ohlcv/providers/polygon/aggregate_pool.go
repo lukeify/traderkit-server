@@ -61,6 +61,5 @@ func (pool *AggregatePool) StartWorkers(from time.Time, to time.Time) {
 	}
 
 	wg.Wait()
-	println("Closed pool.aggregates")
 	close(pool.aggregates)
 }

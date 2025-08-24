@@ -20,7 +20,7 @@ type backfillIterator struct {
 	client     *polygon.Client
 	metrics    *ohlcv.Metrics
 	ingestFrom time.Time
-	tickers    map[string]struct{}
+	predicate  func(string) bool
 	source     BackfillSource
 	flatFiles  *flatFilesBackfill
 	rest       *restBackfill

@@ -26,10 +26,14 @@ func main() {
 	}
 	db := database.New()
 
+	predicateFn := func(ticker string) bool {
+		return ticker == "AA"
+	}
+
 	// Create an ingestor struct that uses `Polygon` as the ingestion data provider. Then backfill any unloaded data
-	//into the `bars` database table. This may not need to be done if the table is up to date. Alternatively, it may
-	//need to be completely done if the table is empty.
-	err := ohlcv.NewIngestor(db, polygonBackfill.New()).Backfill(nil)
+	// into the `bars` database table. This may not need to be done if the table is up to date. Alternatively, it may
+	// need to be completely done if the table is empty.
+	err := ohlcv.NewIngestor(db, polygonBackfill.New()).Backfill(predicateFn)
 	if err != nil {
 		log.Fatalf("Backfill failed with error: %v\n", err)
 	}

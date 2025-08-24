@@ -23,7 +23,7 @@ type Ingestion struct {
 // TODO: Optionally provide the ability to backfill only on specific symbols.
 
 type IngestionProvider interface {
-	Backfill(ingestFrom time.Time, tickers map[string]struct{}) (pgx.CopyFromSource, error)
+	Backfill(ingestFrom time.Time, predicate func(string) bool) (pgx.CopyFromSource, error)
 	SetMetrics(metrics *Metrics)
 }
 
@@ -49,7 +49,7 @@ func NewIngestor(db *pgxpool.Pool, provider IngestionProvider) *Ingestion {
 // backfilling will begin from the start of the defined retention period using `COPY FROM`. If the struct contains a
 // valid range, then the backfill will begin from the starting bound of the range, using `UPSERT` ergonomics, and then
 // `COPY FROM` following the end of the range.
-func (oi *Ingestion) Backfill(tickers map[string]struct{}) error {
+func (oi *Ingestion) Backfill(predicate func(string) bool) error {
 	pp := progress_printer.NewProgressPrinter(os.Stdout)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer func() {
@@ -60,7 +60,7 @@ func (oi *Ingestion) Backfill(tickers map[string]struct{}) error {
 
 	// Compute the fill state of the database, and when to begin ingesting data from for backfilling.
 	fs := FillState{}
-	iter, err := oi.provider.Backfill(fs.IngestFrom(oi.db), tickers)
+	iter, err := oi.provider.Backfill(fs.IngestFrom(oi.db), predicate)
 	if err != nil {
 		return err
 	}

@@ -12,7 +12,7 @@ import (
 // TODO: Accumulate should take a filter function to filter out unwanted tickers.
 
 type TickerSource interface {
-	Accumulate()
+	Accumulate(predicate func(string) bool)
 	Channel() chan string
 }
 
@@ -34,11 +34,12 @@ func NewRestTickerSource(client *polygon.Client) TickerSource {
 	}
 }
 
-func (rts *RestTickerSource) Accumulate() {
+func (rts *RestTickerSource) Accumulate(predicate func(string) bool) {
 	for rts.iter.Next() {
 		ticker := rts.iter.Item().Ticker
-		// TODO: implement filtering
-		rts.channel <- ticker
+		if predicate(ticker) {
+			rts.channel <- ticker
+		}
 	}
 	if rts.iter.Err() != nil {
 		log.Fatal(rts.iter.Err())
@@ -55,9 +56,11 @@ type MapTickerSource struct {
 	channel chan string
 }
 
-func (mts *MapTickerSource) Accumulate() {
+func (mts *MapTickerSource) Accumulate(predicate func(string) bool) {
 	for k, _ := range mts.tickers {
-		mts.channel <- k
+		if predicate(k) {
+			mts.channel <- k
+		}
 	}
 }
 

@@ -15,7 +15,6 @@ func (rb *restBackfill) Next() bool {
 	// Pluck from the aggregates channel.
 	entry, ok := <-rb.aggPool.aggregates
 	if !ok {
-		println("No more aggregates in the channel, returning false from restBackfill.Next()")
 		return false
 	}
 	rb.entry = entry
