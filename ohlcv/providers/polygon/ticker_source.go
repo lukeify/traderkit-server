@@ -2,7 +2,6 @@ package polygon
 
 import (
 	"context"
-	"fmt"
 	"log"
 
 	"github.com/polygon-io/client-go/rest"
@@ -10,9 +9,11 @@ import (
 	"github.com/polygon-io/client-go/rest/models"
 )
 
+// TODO: Accumulate should take a filter function to filter out unwanted tickers.
+
 type TickerSource interface {
 	Accumulate()
-	Read(ctx context.Context, fn func(string)) error
+	Channel() chan string
 }
 
 type RestTickerSource struct {
@@ -35,8 +36,9 @@ func NewRestTickerSource(client *polygon.Client) TickerSource {
 
 func (rts *RestTickerSource) Accumulate() {
 	for rts.iter.Next() {
-		// TODO: Improve selection logic for tickers when we only want to select from a certain number of tickers.
-		rts.channel <- rts.iter.Item().Ticker
+		ticker := rts.iter.Item().Ticker
+		// TODO: implement filtering
+		rts.channel <- ticker
 	}
 	if rts.iter.Err() != nil {
 		log.Fatal(rts.iter.Err())
@@ -44,42 +46,21 @@ func (rts *RestTickerSource) Accumulate() {
 	close(rts.channel)
 }
 
-// Read uses the functionality of `select` (https://go.dev/ref/spec#Select_statements) to wait until the `tfi.tickers`
-// channel has data available to read from (this is when the ticker fetchign retri
-func (rts *RestTickerSource) Read(ctx context.Context, fn func(string)) error {
-	// TODO: This used to have a `for` loop around it? Maybe it's not needed.
-	select {
-	case ticker, ok := <-rts.channel:
-		if !ok {
-			// TODO: Describe under what scenario this would happen.
-			// This happens when the channel is closed.
-			return fmt.Errorf("tfi.tickers not ok")
-		}
-		fn(ticker)
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("ctx.Done")
-	}
+func (rts *RestTickerSource) Channel() chan string {
+	return rts.channel
 }
 
 type MapTickerSource struct {
 	tickers map[string]struct{}
+	channel chan string
 }
 
 func (mts *MapTickerSource) Accumulate() {
-	// No-op for MapTickerSource, as tickers are already provided in the map.
+	for k, _ := range mts.tickers {
+		mts.channel <- k
+	}
 }
 
-func (mts *MapTickerSource) Read(_ context.Context, fn func(string)) error {
-	if len(mts.tickers) == 0 {
-		return fmt.Errorf("no tickers available in MapTickerSource")
-	}
-
-	for k := range mts.tickers {
-		fn(k)
-		delete(mts.tickers, k)
-		break
-	}
-
-	return nil
+func (mts *MapTickerSource) Channel() chan string {
+	return mts.channel
 }

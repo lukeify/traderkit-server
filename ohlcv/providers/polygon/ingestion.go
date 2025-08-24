@@ -53,8 +53,19 @@ func (i *Ingestion) Backfill(ingestFrom time.Time, tickers map[string]struct{}) 
 	}
 
 	bf.flatFiles = &flatFilesBackfill{parent: bf, minio: m}
-	bf.rest = &restBackfill{parent: bf, tickerSource: NewRestTickerSource(i.client)}
+
+	tickerSource := NewRestTickerSource(i.client)
+	// TODO: Determine if this is the right buffer size for capturing aggregates
+	aggPool := NewAggregatePool(i.client, tickerSource, 1000)
+
+	bf.rest = &restBackfill{
+		parent:       bf,
+		tickerSource: tickerSource,
+		aggPool:      aggPool,
+	}
+
 	go bf.rest.tickerSource.Accumulate()
+	go bf.rest.aggPool.StartWorkers(ingestFrom, time.Now())
 
 	return bf, nil
 }
