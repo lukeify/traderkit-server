@@ -44,7 +44,7 @@ func (i *Ingestion) Backfill(ingestFrom time.Time, predicate func(string) bool) 
 		log.Fatalf("Error instantiating MinIO client: %v\n", err)
 	}
 
-	bf := &backfillIterator{
+	bi := &backfillIterator{
 		client:     i.client,
 		metrics:    i.metrics,
 		ingestFrom: ingestFrom,
@@ -52,22 +52,19 @@ func (i *Ingestion) Backfill(ingestFrom time.Time, predicate func(string) bool) 
 		source:     FlatFiles,
 	}
 
-	bf.flatFiles = &flatFilesBackfill{parent: bf, minio: m}
+	bi.flatFiles = &flatFilesBackfill{parent: bi, minio: m}
 
 	tickerSource := NewRestTickerSource(i.client)
 	// TODO: Determine if this is the right buffer size for capturing aggregates
 	aggPool := NewAggregatePool(i.client, tickerSource, 1000)
 
-	bf.rest = &restBackfill{
-		parent:       bf,
+	bi.rest = &restBackfill{
+		parent:       bi,
 		tickerSource: tickerSource,
 		aggPool:      aggPool,
 	}
 
-	go bf.rest.tickerSource.Accumulate(predicate)
-	go bf.rest.aggPool.StartWorkers(ingestFrom, time.Now())
-
-	return bf, nil
+	return bi, nil
 }
 
 func (i *Ingestion) SetMetrics(m *ohlcv.Metrics) {

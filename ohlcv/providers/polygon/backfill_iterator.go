@@ -27,6 +27,14 @@ type backfillIterator struct {
 	err        error
 }
 
+func (bi *backfillIterator) MarkSourceCompleted(updatedIngestFrom time.Time) {
+	bi.ingestFrom = updatedIngestFrom
+	if bi.source == FlatFiles {
+		bi.rest.Startup()
+		bi.source = RestAPI
+	}
+}
+
 // Next prepares the next row of data to be read for backfilling. Data is ready sequentially from the Polygon's
 // flatfiles corresponding to the `ingestFrom` date, iterating through each file until no more flatfiles exist.
 // Following this, the iterator switches to reading from the REST API for un-backfilled data that is not available in a

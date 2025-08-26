@@ -32,11 +32,8 @@ func (ffb *flatFilesBackfill) Next() bool {
 		// source to `RestAPI` and internally calling the iterator.
 		err := ffb.openFlatFile()
 		if err != nil {
-			// TODO: openFlatFile now increments
-			println("Switching to rest API")
 			// TODO: Close any open resources after switching to REST API from flat file API.
-			ffb.parent.source = RestAPI
-			ffb.parent.ingestFrom = ffb.getFlatFileDate()
+			ffb.parent.MarkSourceCompleted(ffb.getFlatFileDate())
 			return ffb.parent.Next()
 		}
 	}
@@ -97,7 +94,6 @@ func (ffb *flatFilesBackfill) toFlatFileName(t time.Time) string {
 }
 
 func (ffb *flatFilesBackfill) openFlatFile() error {
-	print("Calling getFlatFileDate in openFile\n")
 	fileName := ffb.toFlatFileName(ffb.getFlatFileDate())
 	fmt.Printf("File name is %s\n", fileName)
 	var err error
@@ -141,7 +137,6 @@ func (ffb *flatFilesBackfill) openFlatFile() error {
 
 	// Increment the date so the next time we open a flat file, it will use the newly-set date. This also avoids having
 	// to wind back the date by a day if the flat file does not exist.
-	print("Calling setNextFlatFileDate at end of openFile\n")
 	ffb.setNextFlatFileDate()
 	print("End of openFile, flatFileDate is now ", ffb.flatFileDate.String(), "\n")
 	//if err != nil {
@@ -211,22 +206,14 @@ func (ffb *flatFilesBackfill) closeMinioObject() {
 }
 
 func (ffb *flatFilesBackfill) getFlatFileDate() time.Time {
-	// fmt.Printf("current flatFileDate: %s\n", ffb.flatFileDate)
-	fmt.Printf("[getFlatFileDate] current flatFileDate: %s\n", ffb.flatFileDate)
 	if ffb.flatFileDate.IsZero() {
-		fmt.Printf("flatFileDate is zero")
 		ffb.flatFileDate = ffb.parent.ingestFrom
-
 	}
 	return ffb.flatFileDate
 }
 
 func (ffb *flatFilesBackfill) setNextFlatFileDate() {
-	fmt.Printf("[setNextFlatFileDate] current flatFileDate: %s\n", ffb.flatFileDate)
-	if ffb.flatFileDate.IsZero() {
-		fmt.Printf("flatFileDate is zero")
-		ffb.flatFileDate = ffb.parent.ingestFrom
-	}
+	ffb.getFlatFileDate()
 
 	loc, _ := time.LoadLocation("America/New_York")
 	ffb.flatFileDate = time.Date(
