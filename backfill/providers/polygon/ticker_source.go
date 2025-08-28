@@ -9,22 +9,20 @@ import (
 	"github.com/polygon-io/client-go/rest/models"
 )
 
-// TODO: Accumulate should take a filter function to filter out unwanted tickers.
-
-type TickerSource interface {
-	Accumulate(predicate func(string) bool)
-	Channel() chan string
+type tickerSource interface {
+	accumulate(predicate func(string) bool)
+	getChannel() chan string
 }
 
-type RestTickerSource struct {
+type restTickerSource struct {
 	client  *polygon.Client
 	iter    *iter.Iter[models.Ticker]
 	channel chan string
 }
 
-func NewRestTickerSource(client *polygon.Client) TickerSource {
+func newRestTickerSource(client *polygon.Client) tickerSource {
 	// TODO: Is this buffer size appropriate? Currently it holds all U.S. equity tickers with space to spare.
-	return &RestTickerSource{
+	return &restTickerSource{
 		client:  client,
 		channel: make(chan string, 20000),
 		iter: client.ListTickers(
@@ -34,7 +32,7 @@ func NewRestTickerSource(client *polygon.Client) TickerSource {
 	}
 }
 
-func (rts *RestTickerSource) Accumulate(predicate func(string) bool) {
+func (rts *restTickerSource) accumulate(predicate func(string) bool) {
 	for rts.iter.Next() {
 		ticker := rts.iter.Item().Ticker
 		if predicate(ticker) {
@@ -47,16 +45,16 @@ func (rts *RestTickerSource) Accumulate(predicate func(string) bool) {
 	close(rts.channel)
 }
 
-func (rts *RestTickerSource) Channel() chan string {
+func (rts *restTickerSource) getChannel() chan string {
 	return rts.channel
 }
 
-type MapTickerSource struct {
+type mapTickerSource struct {
 	tickers map[string]struct{}
 	channel chan string
 }
 
-func (mts *MapTickerSource) Accumulate(predicate func(string) bool) {
+func (mts *mapTickerSource) accumulate(predicate func(string) bool) {
 	for k, _ := range mts.tickers {
 		if predicate(k) {
 			mts.channel <- k
@@ -64,6 +62,6 @@ func (mts *MapTickerSource) Accumulate(predicate func(string) bool) {
 	}
 }
 
-func (mts *MapTickerSource) Channel() chan string {
+func (mts *mapTickerSource) getChannel() chan string {
 	return mts.channel
 }

@@ -4,43 +4,36 @@ import (
 	"fmt"
 	"time"
 
-	"traderkit-server/ohlcv"
+	"traderkit-server/backfill"
 
 	"github.com/polygon-io/client-go/rest"
 )
 
-type BackfillSource int
-
-const (
-	FlatFiles BackfillSource = iota
-	RestAPI
-)
-
 type backfillIterator struct {
-	client     *polygon.Client
-	metrics    *ohlcv.Metrics
-	ingestFrom time.Time
-	predicate  func(string) bool
-	source     BackfillSource
-	flatFiles  *flatFilesBackfill
-	rest       *restBackfill
-	err        error
+	client       *polygon.Client
+	metrics      *backfill.Metrics
+	backfillFrom time.Time
+	predicate    func(string) bool
+	source       backfillSource
+	flatFiles    *flatFilesBackfill
+	rest         *restBackfill
+	err          error
 }
 
-func (bi *backfillIterator) MarkSourceCompleted(updatedIngestFrom time.Time) {
-	bi.ingestFrom = updatedIngestFrom
+func (bi *backfillIterator) MarkSourceCompleted(updatedBackfillFrom time.Time) {
+	bi.backfillFrom = updatedBackfillFrom
 	if bi.source == FlatFiles {
-		bi.rest.Startup()
+		bi.rest.startup()
 		bi.source = RestAPI
 	}
 }
 
 // Next prepares the next row of data to be read for backfilling. Data is ready sequentially from the Polygon's
-// flatfiles corresponding to the `ingestFrom` date, iterating through each file until no more flatfiles exist.
+// flatfiles corresponding to the `backfillFrom` date, iterating through each file until no more flatfiles exist.
 // Following this, the iterator switches to reading from the REST API for un-backfilled data that is not available in a
 // flatfile yet (a flatfile for the yesterday's data is not published until 11AM ET the following day).
 //
-// If the backfill has not begun, then `bi.gz` will be `nil`, and opening a flatfile corresponding to the `ingestFrom`
+// If the backfill has not begun, then `bi.gz` will be `nil`, and opening a flatfile corresponding to the `backfillFrom`
 // date will be attempted.
 func (bi *backfillIterator) Next() bool {
 	switch bi.source {
@@ -67,3 +60,10 @@ func (bi *backfillIterator) Err() error {
 	// TODO: Find out how to use this method.
 	return bi.err
 }
+
+type backfillSource int
+
+const (
+	FlatFiles backfillSource = iota
+	RestAPI
+)

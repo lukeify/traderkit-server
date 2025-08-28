@@ -148,8 +148,8 @@ func (ffb *flatFilesBackfill) openFlatFile() error {
 
 // readFromFlatFile reads rows until it finds a row that can be inserted into the database. Rows that can be inserted
 // are from row reads that don't result in an error, have a predicate that indicates the row should be skipped, or rows
-// that are equal to or after the `ingestFrom` time (rows before the `ingestFrom` time are discarded as they are already
-// stored in the database).
+// that are equal to or after the `backfillFrom` time (rows before the `backfillFrom` time are discarded as they are
+// already stored in the database).
 func (ffb *flatFilesBackfill) readFromFlatFile() error {
 	var err error
 
@@ -166,11 +166,11 @@ func (ffb *flatFilesBackfill) readFromFlatFile() error {
 			continue
 		}
 
-		// Break if the row's timestamp is equal or after the `ingestFrom`
+		// Break if the row's timestamp is equal or after the `backfillFrom`.
 		windowStartNs, _ := strconv.ParseUint(ffb.row[6], 10, 64)
 		ts := time.Unix(0, int64(windowStartNs))
 
-		if ts.Equal(ffb.parent.ingestFrom) || ts.After(ffb.parent.ingestFrom) {
+		if ts.Equal(ffb.parent.backfillFrom) || ts.After(ffb.parent.backfillFrom) {
 			break
 		}
 
@@ -207,7 +207,7 @@ func (ffb *flatFilesBackfill) closeMinioObject() {
 
 func (ffb *flatFilesBackfill) getFlatFileDate() time.Time {
 	if ffb.flatFileDate.IsZero() {
-		ffb.flatFileDate = ffb.parent.ingestFrom
+		ffb.flatFileDate = ffb.parent.backfillFrom
 	}
 	return ffb.flatFileDate
 }

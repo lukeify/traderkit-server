@@ -6,21 +6,21 @@ import (
 
 type restBackfill struct {
 	parent       *backfillIterator
-	tickerSource TickerSource
-	aggPool      *AggregatePool
-	entry        *AggregateEntry
+	tickerSource tickerSource
+	aggPool      *aggregatePool
+	entry        *aggregateEntry
 }
 
-// Startup begins two goroutines:
-// 1. Calls `tickerSource.Accumulate` which will retrieve the tickers and insert them into a channel to retrieve
+// startup begins two goroutines:
+// 1. Calls `tickerSource.accumulate` which will retrieve the tickers and insert them into a channel to retrieve
 // aggregate data for. This accumulation process can be customised depending on what struct that conforms to the
-// `TickerSource` interface is used. For example, the default uses a `RestTickerSource`.
-// 2. Calls `aggPool.StartWorkers` which retrieves aggregates for the accumulated tickers and pushes them to a channel
+// `tickerSource` interface is used. For example, the default uses a `restTickerSource`.
+// 2. Calls `aggPool.startWorkers` which retrieves aggregates for the accumulated tickers and pushes them to a channel
 // to then be popped off for insertion into the database.
-// TODO: `TickerSource` and `AggregatePool` could possibly be merged into an `AggregateSource`.
-func (rb *restBackfill) Startup() {
-	go rb.tickerSource.Accumulate(rb.parent.predicate)
-	go rb.aggPool.StartWorkers(rb.parent.ingestFrom, time.Now())
+// TODO: `tickerSource` and `aggregatePool` could possibly be merged into an `AggregateSource`.
+func (rb *restBackfill) startup() {
+	go rb.tickerSource.accumulate(rb.parent.predicate)
+	go rb.aggPool.startWorkers(rb.parent.backfillFrom, time.Now())
 }
 
 func (rb *restBackfill) Next() bool {
@@ -50,6 +50,3 @@ func (rb *restBackfill) Values() ([]any, error) {
 		rb.entry.Agg.Transactions,
 	}, nil
 }
-
-// TODO: Figure out how to tell if we're out of tickers in the tickerIter.
-// TODO: We could also fetch the next ticker from the REST API while we're ingesting the current ticker.

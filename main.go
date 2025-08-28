@@ -7,9 +7,9 @@ import (
 	"os"
 
 	healthChecksApi "traderkit-server/apis/health_checks"
+	"traderkit-server/backfill"
+	polygonBackfill "traderkit-server/backfill/providers/polygon"
 	"traderkit-server/database"
-	"traderkit-server/ohlcv"
-	polygonBackfill "traderkit-server/ohlcv/providers/polygon"
 	"traderkit-server/utils"
 
 	"google.golang.org/grpc"
@@ -33,7 +33,7 @@ func main() {
 	// Create an ingestor struct that uses `Polygon` as the ingestion data provider. Then backfill any unloaded data
 	// into the `bars` database table. This may not need to be done if the table is up to date. Alternatively, it may
 	// need to be completely done if the table is empty.
-	err := ohlcv.NewIngestor(db, polygonBackfill.New()).Backfill(predicateFn)
+	err := backfill.NewBackfill(db, polygonBackfill.New()).Backfill(predicateFn)
 	if err != nil {
 		log.Fatalf("Backfill failed with error: %v\n", err)
 	}
