@@ -20,7 +20,7 @@ type restBackfill struct {
 // TODO: `tickerSource` and `aggregatePool` could possibly be merged into an `AggregateSource`.
 func (rb *restBackfill) startup() {
 	go rb.tickerSource.accumulate(rb.parent.predicate)
-	go rb.aggPool.startWorkers(rb.parent.backfillFrom, time.Now())
+	go rb.aggPool.startWorkers(rb.parent.backfillFrom, rb.parent.backfillTo)
 }
 
 func (rb *restBackfill) Next() bool {

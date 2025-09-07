@@ -7,6 +7,6 @@ import (
 )
 
 type Provider interface {
-	Backfill(backfillFrom time.Time, predicate func(string) bool) (pgx.CopyFromSource, error)
+	Backfill(from time.Time, to time.Time, predicate func(string) bool) (pgx.CopyFromSource, error)
 	SetMetrics(metrics *Metrics)
 }

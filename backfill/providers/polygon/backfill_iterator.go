@@ -13,6 +13,7 @@ type backfillIterator struct {
 	client       *polygon.Client
 	metrics      *backfill.Metrics
 	backfillFrom time.Time
+	backfillTo   time.Time
 	predicate    func(string) bool
 	source       backfillSource
 	flatFiles    *flatFilesBackfill

@@ -44,7 +44,7 @@ func NewBackfill(db *pgxpool.Pool, provider Provider) *Backfill {
 // begin from the start of the defined retention period using `COPY FROM` only. If the struct contains a valid range,
 // then the backfill will begin from the starting bound of the range, using `UPSERT` ergonomics, and then `COPY FROM`
 // after the end of the range.
-func (b *Backfill) Backfill(predicate func(string) bool) error {
+func (b *Backfill) Backfill(to time.Time, predicate func(string) bool) error {
 	pp := progress_printer.NewProgressPrinter(os.Stdout)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer func() {
@@ -55,7 +55,7 @@ func (b *Backfill) Backfill(predicate func(string) bool) error {
 
 	// Compute the fill state of the database, and when to begin ingesting data from for backfilling.
 	fs := fillState{}
-	iter, err := b.provider.Backfill(fs.backfillFrom(b.db), predicate)
+	iter, err := b.provider.Backfill(fs.backfillFrom(b.db), to, predicate)
 	if err != nil {
 		return err
 	}

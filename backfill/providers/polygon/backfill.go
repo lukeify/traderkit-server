@@ -28,8 +28,8 @@ func New() *Backfill {
 	return &Backfill{client: pc}
 }
 
-func (b *Backfill) Backfill(backfillFrom time.Time, predicate func(string) bool) (pgx.CopyFromSource, error) {
-	// TODO: Support being agnostic about the flat file source, so we don't always need to retrieve from Polygon, b.e.
+func (b *Backfill) Backfill(from time.Time, to time.Time, predicate func(string) bool) (pgx.CopyFromSource, error) {
+	// TODO: Support being agnostic about the flat file source, so we don't always need to retrieve from Polygon, i.e.
 	//  we could retrieve from a local CSV file.
 	m, err := minio.New(
 		"files.polygon.io",
@@ -48,20 +48,21 @@ func (b *Backfill) Backfill(backfillFrom time.Time, predicate func(string) bool)
 	bi := &backfillIterator{
 		client:       b.client,
 		metrics:      b.metrics,
-		backfillFrom: backfillFrom,
+		backfillFrom: from,
+		backfillTo:   to,
 		predicate:    predicate,
 		source:       FlatFiles,
 	}
 
 	bi.flatFiles = &flatFilesBackfill{parent: bi, minio: m}
 
-	tickerSource := newRestTickerSource(b.client)
+	tickerSrc := newRestTickerSource(b.client)
 	// TODO: Determine if this is the right buffer size for capturing aggregates
-	aggPool := newAggregatePool(b.client, tickerSource, 1000)
+	aggPool := newAggregatePool(b.client, tickerSrc, 1000)
 
 	bi.rest = &restBackfill{
 		parent:       bi,
-		tickerSource: tickerSource,
+		tickerSource: tickerSrc,
 		aggPool:      aggPool,
 	}
 
