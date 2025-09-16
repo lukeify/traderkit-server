@@ -3,3 +3,6 @@ data/
 
 # Ignore protoc-generated files
 *.pb.go
+
+# Ignore Grafana dashboards. Don't back them up to git, but allow them to be stored in the repository.
+grafana/provisioning/dashboards/*.json
